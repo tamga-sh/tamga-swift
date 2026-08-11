@@ -1,0 +1,67 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # macOS target: lint, build, test, and gate on 80% line coverage.
+  macos:
+    name: macOS (swiftlint + swift test + coverage gate)
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      # macOS runner images ship Xcode already -- no separate setup action
+      # is needed to install it. We still pin the exact version so a runner
+      # image bump doesn't silently change which Swift toolchain CI builds
+      # against.
+      - name: Select Xcode
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: "16.1"
+
+      - name: Install SwiftLint
+        run: brew install swiftlint
+
+      - name: Lint
+        run: swiftlint lint --strict
+
+      - name: Build & test with coverage
+        run: swift test --enable-code-coverage
+
+      - name: Enforce coverage gate
+        run: |
+          set -eu
+          BIN_PATH="$(swift build --show-bin-path)"
+          XCTEST_BUNDLE=$(find "$BIN_PATH" -name '*.xctest' -maxdepth 1 | head -n1)
+          COV_BIN="${XCTEST_BUNDLE}/Contents/MacOS/$(basename "${XCTEST_BUNDLE}" .xctest)"
+          PROFDATA="${BIN_PATH}/codecov/default.profdata"
+          xcrun llvm-cov export -summary-only "${COV_BIN}" -instr-profile "${PROFDATA}" \
+            | ./Scripts/check-coverage.sh
+
+  # iOS target: build/test-pass check only. Coverage gating lives solely in
+  # the macOS job above to avoid double-counting the same test suite run
+  # twice against the 80% threshold.
+  ios:
+    name: iOS Simulator (xcodebuild test)
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select Xcode
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: "16.1"
+
+      - name: Test on iOS Simulator
+        run: |
+          xcodebuild test \
+            -scheme Tamga \
+            -destination 'platform=iOS Simulator,name=iPhone 16' \
+            -skipMacroValidation

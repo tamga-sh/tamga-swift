@@ -1,0 +1,9 @@
+# Swift Package Index metadata.
+# https://swiftpackageindex.com/spi/spi-server/blob/main/Documentation/SPIManifest.md
+version: 1
+builder:
+  configs:
+    - platform: macos-spm
+      swift_version: "6.0"
+    - platform: ios
+      swift_version: "6.0"

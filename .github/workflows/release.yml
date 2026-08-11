@@ -1,0 +1,98 @@
+name: Release
+
+# Release automation for tamga-swift, in two parts:
+#
+# 1. `release-please` watches conventional-commit messages on `main` and
+#    maintains a standing "Release PR" that accumulates CHANGELOG.md entries
+#    and bumps version metadata. Merging that PR cuts a tag + GitHub Release.
+#    Tag push then triggers build-xcframework.yml (a separate workflow --
+#    see that file) to build and upload the actual XCFramework asset.
+#
+# 2. Once build-xcframework.yml has published the asset, the
+#    `update-package-manifest` job below reads its checksum/URL output and
+#    pushes a bot commit directly to `main` (NOT a new tag) that fills in
+#    Package.swift's `binaryTarget(url:checksum:)` placeholder.
+#
+# WHY TWO STEPS, NOT ONE JOB: SPM's `binaryTarget(url:checksum:)` must point
+# at an already-uploaded release asset with a checksum computed from that
+# exact asset -- but the asset can't be built until the tag/release exists,
+# and the checksum can't be computed until the asset exists. A single job
+# cannot both cut the release and finalize the manifest that describes it.
+# The bot commit lands on `main` (not a new tag) because it is describing
+# the release that already happened, not creating a new one -- a tag whose
+# contents change after the tag is cut would be a correctness hazard for
+# anyone who already resolved the package at that tag. The just-cut tag's
+# Package.swift will have stale placeholder values for the brief window
+# between build-xcframework.yml finishing and this bot commit landing; the
+# *next* tag naturally includes the corrected manifest.
+#
+# NO REGISTRY PUBLISH STEP EXISTS OR IS NEEDED. Unlike npm/PyPI/crates.io,
+# SPM has no central package registry requirement -- the git tag itself is
+# the release artifact from a consumer's point of view;
+# `.package(url: "https://github.com/tamga-sh/tamga-swift", from: "<version>")`
+# resolves directly against GitHub's tag list.
+
+on:
+  push:
+    branches: [main]
+  workflow_run:
+    workflows: ["Build XCFramework"]
+    types: [completed]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  release-please:
+    name: release-please
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: googleapis/release-please-action@v4
+        with:
+          release-type: simple
+
+  # Runs after build-xcframework.yml completes successfully on a tag it was
+  # triggered by. Reads that workflow's checksum/asset-url outputs and
+  # patches Package.swift in place.
+  update-package-manifest:
+    name: Update Package.swift binaryTarget
+    if: github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+
+      # PLACEHOLDER: reading a completed workflow_run's job outputs requires
+      # either the GitHub API (gh run view --json) or an artifact handoff,
+      # since `workflow_run` does not expose the triggering workflow's
+      # `outputs:` directly. Left as a documented placeholder pending
+      # tamga-c's actual release cadence -- fill in once build-xcframework.yml
+      # is producing real checksums.
+      - name: Fetch checksum + asset URL from build-xcframework.yml run
+        id: artifact
+        run: |
+          echo "PLACEHOLDER: gh run view ${{ github.event.workflow_run.id }} --json ..."
+          echo "checksum=PLACEHOLDER_UNTIL_TAMGA_C_RELEASES" >> "$GITHUB_OUTPUT"
+          echo "asset_url=https://github.com/tamga-sh/tamga-c/releases/download/vX.Y.Z/TamgaCore.xcframework.zip" >> "$GITHUB_OUTPUT"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Patch Package.swift binaryTarget
+        run: |
+          set -eu
+          sed -i \
+            -e "s#url: \".*TamgaCore.xcframework.zip\"#url: \"${{ steps.artifact.outputs.asset_url }}\"#" \
+            -e "s#checksum: \".*\"#checksum: \"${{ steps.artifact.outputs.checksum }}\"#" \
+            Package.swift
+
+      - name: Commit and push to main
+        run: |
+          set -eu
+          git config user.name "tamga-release-bot"
+          git config user.email "release-bot@tamga.sh"
+          git add Package.swift
+          git commit -m "chore: update TamgaCore binaryTarget to ${{ github.event.workflow_run.head_branch }}"
+          git push origin main

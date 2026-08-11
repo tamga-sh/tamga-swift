@@ -1,0 +1,10 @@
+// Makes tamga-c's C ABI (tamga.h, via shim.h) importable from Swift as `CTamgaShim`.
+//
+// STUB: shim.h is currently an empty placeholder. Once tamga-c ships its v0.1
+// release with a frozen tamga.h, populate shim.h with a thin `#include <tamga.h>`
+// re-export (do not hand-copy declarations -- re-export the real header so this
+// package never drifts from tamga-c's actual ABI).
+module CTamgaShim {
+    header "shim.h"
+    export *
+}

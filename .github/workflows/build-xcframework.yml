@@ -1,0 +1,81 @@
+name: Build XCFramework
+
+# Step 1 of the two-step release flow (see release.yml and CLAUDE.md's
+# "Release process" section for the full chicken-and-egg explanation).
+#
+# Triggered on tag push once release-please (release.yml) has cut a tag.
+# Builds tamga-c's native artifacts for every platform target, assembles
+# them into a single XCFramework, zips it, computes the SPM-compatible
+# checksum, and uploads the zip to the GitHub Release that the tag created.
+#
+# This job intentionally does NOT touch Package.swift -- that happens in
+# release.yml's post-release bot-commit job, which runs after this workflow
+# finishes and can read the asset URL + checksum this job produces.
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch: {}
+
+jobs:
+  build-xcframework:
+    name: Build & publish TamgaCore.xcframework
+    runs-on: macos-15
+    permissions:
+      contents: write
+    outputs:
+      checksum: ${{ steps.checksum.outputs.checksum }}
+      asset_url: ${{ steps.upload.outputs.url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select Xcode
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: "16.1"
+
+      # STUB: tamga-c has not published a reusable build-native.yml yet.
+      # Once it does, this step becomes:
+      #
+      #   - name: Build tamga-c native artifacts
+      #     uses: tamga-sh/tamga-c/.github/workflows/build-native.yml@main
+      #     with:
+      #       targets: macos-arm64,macos-x86_64,ios-arm64,ios-simulator-arm64,ios-simulator-x86_64
+      #
+      # via `workflow_call`. Left as a placeholder so this workflow file is
+      # valid YAML and documents the intended call shape.
+      - name: Build tamga-c native artifacts (PLACEHOLDER)
+        run: |
+          echo "PLACEHOLDER: call tamga-c's reusable build-native.yml via workflow_call once it exists."
+          echo "See docs/plans/tamga-swift.plan.md Section N and tamga-c's own release plan."
+          exit 1
+
+      - name: Assemble XCFramework
+        run: |
+          set -eu
+          # PLACEHOLDER: exact -library/-framework arguments depend on
+          # tamga-c's actual per-platform output layout, which does not
+          # exist yet.
+          xcodebuild -create-xcframework \
+            -output build/TamgaCore.xcframework
+          echo "PLACEHOLDER: fill in -library/-headers pairs per platform once tamga-c ships artifacts."
+
+      - name: Zip XCFramework
+        run: |
+          set -eu
+          cd build
+          zip -r TamgaCore.xcframework.zip TamgaCore.xcframework
+
+      - name: Compute SPM checksum
+        id: checksum
+        run: |
+          set -eu
+          CHECKSUM=$(swift package compute-checksum build/TamgaCore.xcframework.zip)
+          echo "checksum=${CHECKSUM}" >> "$GITHUB_OUTPUT"
+
+      - name: Upload to GitHub Release
+        id: upload
+        uses: softprops/action-gh-release@v2
+        with:
+          files: build/TamgaCore.xcframework.zip
