@@ -24,7 +24,7 @@ jobs:
       - name: Select Xcode
         uses: maxim-lobanov/setup-xcode@v1
         with:
-          xcode-version: "16.1"
+          xcode-version: "16.4"
 
       - name: Install SwiftLint
         run: brew install swiftlint
@@ -101,25 +101,23 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Pinned to 16.4, not 16.1: confirmed directly (see "Create an iOS
+      # Simulator device" below for the full account) that Xcode 16.1's own
+      # documented default Simulator SDK (iOS 18.1) is not actually
+      # installed as a runtime on this runner image at all -- GitHub's own
+      # runner-images manifest lists only iOS 18.5, 18.6, 26.0, 26.1, and
+      # 26.2 as genuinely pre-installed simulator runtimes for this image.
+      # Xcode 16.4 is the smallest version bump whose own documented
+      # default (iOS 18.5) is one of those. `xcodebuild -downloadPlatform
+      # iOS` was tried first, to keep 16.1 and fetch what it needed
+      # on-demand -- it failed outright ("Unable to connect to simulator")
+      # in this environment, and would have been wasteful regardless:
+      # downloading a runtime the image doesn't have when a compatible one
+      # already sits there unused.
       - name: Select Xcode
         uses: maxim-lobanov/setup-xcode@v1
         with:
-          xcode-version: "16.1"
-
-      # Confirmed directly (see "Create an iOS Simulator device" below for
-      # the full account) that this runner/Xcode combination cannot be
-      # trusted to already have a usable iOS Simulator runtime: GitHub's
-      # own runner-images manifest documents Xcode 16.1 as paired with
-      # "Simulator - iOS 18.1", but that exact runtime was simply absent
-      # from `simctl list runtimes` on the specific ephemeral runner this
-      # job landed on -- only unrelated, newer runtime versions were
-      # present, mounted as shared CoreSimulator volumes Xcode 16.1 doesn't
-      # recognize as its own. `-downloadPlatform` is Apple's own supported
-      # mechanism for exactly this: it fetches and registers whichever
-      # platform the selected Xcode actually needs, regardless of what
-      # happened to be pre-cached on this particular runner instance.
-      - name: Ensure a matching iOS Simulator platform is installed
-        run: xcodebuild -downloadPlatform iOS
+          xcode-version: "16.4"
 
       # See the macOS job's identical step for the full rationale -- same
       # local-dev-override-automated-in-CI pattern, iOS Simulator slice
@@ -163,48 +161,30 @@ jobs:
         id: sim
         run: |
           set -eu
-          # Searching for a pre-existing device -- whether via simctl or
-          # via xcodebuild's own -showdestinations -- is not reliable on
-          # this runner/Xcode combination (macos-15 + Xcode 16.1 via
-          # maxim-lobanov/setup-xcode), confirmed directly across three
-          # consecutive CI failures: simctl reported a device (`iPhone 16
-          # Pro`) that xcodebuild's own destination resolution didn't
-          # recognize at all (not even as "ineligible"); a follow-up run
-          # showed xcodebuild had NO concrete device for any platform --
-          # iOS, tvOS, watchOS, visionOS -- only the generic "Any ...
-          # Simulator Device" placeholders, which `xcodebuild test` cannot
-          # run against. GitHub's macOS runner pool is heterogeneous: which
-          # simulator devices happen to be pre-provisioned for a given
-          # (image, pinned Xcode version) pairing varies per ephemeral
-          # runner instance. The only reliable fix is to stop searching for
-          # a pre-existing device and create one fresh every run.
+          # Searching for a pre-existing device is not reliable here --
+          # confirmed directly, whether via simctl (found a device
+          # xcodebuild's own destination resolution didn't recognize at
+          # all) or via xcodebuild's own -showdestinations (found nothing
+          # concrete for any platform on some runner instances). GitHub's
+          # macOS runner pool is heterogeneous enough that which simulator
+          # devices happen to be pre-created varies per ephemeral runner
+          # instance. Creating one fresh every run avoids depending on
+          # whatever happened to already exist.
           #
-          # Two earlier versions of this fix guessed at which installed
-          # runtime to use and both failed, confirmed directly: (1) picking
-          # whichever available iOS runtime simctl listed first picked iOS
-          # 18.5, mounted from a separate CoreSimulator volume -- simctl
-          # created the device fine, but xcodebuild test still reported
-          # zero iOS Simulator destinations; (2) requiring the runtime's
-          # bundlePath to live under the selected Xcode's own .app bundle
-          # found nothing at all on this runner -- GitHub's own runner
-          # images don't nest simulator runtimes inside the Xcode.app tree,
-          # they mount them as shared volumes regardless of which Xcode
-          # will use them.
-          #
-          # The actual authority on "which Simulator SDK does Xcode 16.1
-          # use" is Xcode itself, via -showsdks -- confirmed against
-          # GitHub's own published runner-images manifest for this exact
-          # image (macos-15-arm64), which documents Xcode 16.1 as paired
-          # with "Simulator - iOS 18.1" (iphonesimulator18.1), not 18.5.
-          # Reading that pairing directly from xcodebuild rather than
-          # hand-copying today's documented version keeps this correct if
-          # the image's Xcode/SDK pairings change later.
-          #
-          # Even matching by exact version still isn't enough on its own,
-          # confirmed directly: on at least one ephemeral runner instance,
-          # no installed runtime matched "18.1" at all -- see the
-          # "Ensure a matching iOS Simulator platform is installed" step
-          # above, added for exactly that gap.
+          # The runtime to create it from can't be guessed either --
+          # confirmed directly that picking whichever available iOS runtime
+          # simctl lists first can pick one the selected Xcode can't
+          # actually use as a test destination (simctl will happily create
+          # a device against it; xcodebuild will just never see it). The
+          # authority on "which Simulator SDK does the selected Xcode use"
+          # is Xcode itself, via -showsdks. Reading that directly rather
+          # than hand-copying a version number keeps this correct across
+          # runner image and Xcode updates -- see the "Select Xcode" step
+          # above for why the pinned version itself had to change too: the
+          # SDK version Xcode reports as its default isn't guaranteed to
+          # have a matching runtime actually installed on every runner
+          # image, so the version pin and the image's documented installed
+          # runtimes have to agree, not just Xcode and -showsdks.
           SDK_VERSION=$(xcodebuild -showsdks -json | jq -r '[.[] | select(.platform == "iphonesimulator")][0].sdkVersion')
           echo "Xcode's paired iOS Simulator SDK version: $SDK_VERSION"
           RUNTIME_JSON=$(xcrun simctl list runtimes available --json | jq -c --arg v "$SDK_VERSION" '[.runtimes[] | select(.version == $v)][0]')
