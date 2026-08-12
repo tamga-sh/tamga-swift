@@ -32,53 +32,6 @@ jobs:
       - name: Lint
         run: swiftlint lint --strict
 
-      # Package.swift's committed binaryTarget is a url:/checksum: pointing
-      # at THIS repo's own release assets -- which don't exist yet (no
-      # tamga-swift release has ever been cut; Swift business logic is
-      # still 100% stub, so cutting one now would misleadingly imply a
-      # consumable package version exists). Rather than wait on that or
-      # loosen anything, build a real XCFramework from tamga-c's own
-      # already-real, already-published releases (tamga-c ships
-      # independently of this repo) and swap Package.swift to the
-      # documented local-dev `path:` override for this CI run only --
-      # mirroring exactly what CLAUDE.md's "Local Development" section
-      # already tells a human contributor to do, just automated. Never
-      # committed; the checkout is fresh next run either way.
-      - name: Determine tamga-c's latest release tag
-        id: tamga_c_release
-        run: |
-          set -eu
-          TAG=$(gh release list -R tamga-sh/tamga-c --limit 1 --json tagName --jq '.[0].tagName')
-          echo "Using tamga-c release: $TAG"
-          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
-        env:
-          GH_TOKEN: ${{ github.token }}
-
-      - name: Download tamga-c's macOS release artifacts
-        run: |
-          set -eu
-          mkdir -p dist/x86_64 dist/aarch64
-          gh release download "${{ steps.tamga_c_release.outputs.tag }}" -R tamga-sh/tamga-c \
-            -p "tamga-c-macos-x86_64.tar.gz" -p "tamga-c-macos-aarch64.tar.gz" -D dist
-          tar -xzf dist/tamga-c-macos-x86_64.tar.gz -C dist/x86_64 --strip-components=1
-          tar -xzf dist/tamga-c-macos-aarch64.tar.gz -C dist/aarch64 --strip-components=1
-        env:
-          GH_TOKEN: ${{ github.token }}
-
-      - name: Assemble a local TamgaCore.xcframework (macOS universal)
-        run: |
-          set -eu
-          mkdir -p build/slice/include
-          lipo -create dist/x86_64/libtamga.a dist/aarch64/libtamga.a -output build/slice/libtamga.a
-          cp dist/x86_64/tamga.h build/slice/include/tamga.h
-          xcodebuild -create-xcframework \
-            -library build/slice/libtamga.a -headers build/slice/include \
-            -output build/TamgaCore.xcframework
-
-      - name: Point Package.swift at the locally built XCFramework
-        run: |
-          python3 Scripts/ci-use-local-xcframework.py "build/TamgaCore.xcframework"
-
       - name: Build & test with coverage
         run: swift test --enable-code-coverage
 
@@ -101,61 +54,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # Pinned to 16.4, not 16.1: confirmed directly (see "Create an iOS
-      # Simulator device" below for the full account) that Xcode 16.1's own
-      # documented default Simulator SDK (iOS 18.1) is not actually
-      # installed as a runtime on this runner image at all -- GitHub's own
-      # runner-images manifest lists only iOS 18.5, 18.6, 26.0, 26.1, and
-      # 26.2 as genuinely pre-installed simulator runtimes for this image.
-      # Xcode 16.4 is the smallest version bump whose own documented
-      # default (iOS 18.5) is one of those. `xcodebuild -downloadPlatform
-      # iOS` was tried first, to keep 16.1 and fetch what it needed
-      # on-demand -- it failed outright ("Unable to connect to simulator")
-      # in this environment, and would have been wasteful regardless:
-      # downloading a runtime the image doesn't have when a compatible one
-      # already sits there unused.
+      # Pinned to 16.4, not an earlier version: confirmed directly (see
+      # "Create an iOS Simulator device" below) that not every Xcode
+      # version's own documented default Simulator SDK is actually
+      # installed as a runtime on GitHub's runner images -- 16.4's default
+      # (iOS 18.5) is confirmed present on this image's manifest.
       - name: Select Xcode
         uses: maxim-lobanov/setup-xcode@v1
         with:
           xcode-version: "16.4"
-
-      # See the macOS job's identical step for the full rationale -- same
-      # local-dev-override-automated-in-CI pattern, iOS Simulator slice
-      # instead of macOS universal.
-      - name: Determine tamga-c's latest release tag
-        id: tamga_c_release
-        run: |
-          set -eu
-          TAG=$(gh release list -R tamga-sh/tamga-c --limit 1 --json tagName --jq '.[0].tagName')
-          echo "Using tamga-c release: $TAG"
-          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
-        env:
-          GH_TOKEN: ${{ github.token }}
-
-      - name: Download tamga-c's iOS Simulator release artifacts
-        run: |
-          set -eu
-          mkdir -p dist/arm64 dist/x86_64
-          gh release download "${{ steps.tamga_c_release.outputs.tag }}" -R tamga-sh/tamga-c \
-            -p "tamga-c-ios-simulator-arm64.tar.gz" -p "tamga-c-ios-simulator-x86_64.tar.gz" -D dist
-          tar -xzf dist/tamga-c-ios-simulator-arm64.tar.gz -C dist/arm64 --strip-components=1
-          tar -xzf dist/tamga-c-ios-simulator-x86_64.tar.gz -C dist/x86_64 --strip-components=1
-        env:
-          GH_TOKEN: ${{ github.token }}
-
-      - name: Assemble a local TamgaCore.xcframework (iOS Simulator universal)
-        run: |
-          set -eu
-          mkdir -p build/slice/include
-          lipo -create dist/arm64/libtamga.a dist/x86_64/libtamga.a -output build/slice/libtamga.a
-          cp dist/arm64/tamga.h build/slice/include/tamga.h
-          xcodebuild -create-xcframework \
-            -library build/slice/libtamga.a -headers build/slice/include \
-            -output build/TamgaCore.xcframework
-
-      - name: Point Package.swift at the locally built XCFramework
-        run: |
-          python3 Scripts/ci-use-local-xcframework.py "build/TamgaCore.xcframework"
 
       - name: Create an iOS Simulator device
         id: sim
@@ -207,8 +114,7 @@ jobs:
           # scheme SwiftPM auto-generates includes the test targets.
           # Confirmed directly: `xcodebuild -list` shows three schemes
           # (Tamga, Tamga-Package, TamgaObjC); only Tamga-Package's Test
-          # action is populated. Found while fixing the binaryTarget
-          # resolution above -- this was always unreachable before.
+          # action is populated.
           #
           # Destination is the simulator device created fresh in the
           # previous step, selected by id (a stable per-instance UUID).
