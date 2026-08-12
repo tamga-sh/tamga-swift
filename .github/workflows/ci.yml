@@ -156,19 +156,12 @@ jobs:
           # available, only the "Any iOS Simulator Device" placeholder --
           # querying simctl for whatever's actually installed and picking
           # the first available iPhone is more robust than guessing a name.
-          NAME=$(xcrun simctl list devices available --json \
-            | python3 -c "
-import json, sys
-data = json.load(sys.stdin)
-for runtime, devices in data['devices'].items():
-    if 'iOS' not in runtime:
-        continue
-    for d in devices:
-        if d['isAvailable'] and 'iPhone' in d['name']:
-            print(d['name'])
-            sys.exit(0)
-sys.exit(1)
-")
+          # A separate script file (not embedded Python here) avoids the
+          # YAML block-scalar indentation trap that broke an earlier
+          # draft of this step (dedented Python lines inside `run: |`
+          # terminated the block scalar early -- a real, confirmed parse
+          # failure, not a hypothetical one).
+          NAME=$(xcrun simctl list devices available --json | python3 Scripts/find-ios-simulator.py)
           echo "Using simulator: $NAME"
           echo "name=$NAME" >> "$GITHUB_OUTPUT"
 
