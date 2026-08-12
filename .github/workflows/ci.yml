@@ -164,26 +164,32 @@ jobs:
           # runner instance. The only reliable fix is to stop searching for
           # a pre-existing device and create one fresh every run.
           #
-          # A first version of this fix picked whichever available iOS
-          # runtime simctl listed first, system-wide -- confirmed directly
-          # that this still fails: it picked an iOS 18.5 runtime installed
-          # as a separate CoreSimulator volume
-          # (/Library/Developer/CoreSimulator/Volumes/...), simctl created
-          # the device fine, but xcodebuild test STILL reported zero iOS
-          # Simulator destinations -- that runtime isn't bundled with the
-          # selected Xcode, so xcodebuild doesn't consider it "installed"
-          # for itself, even though CoreSimulator has it mounted and simctl
-          # is happy to hand out devices against it. Scoping the runtime
-          # search to one whose bundlePath actually lives under the
-          # selected Xcode's own app bundle (via `xcode-select -p`) is what
-          # makes xcodebuild itself recognize the resulting device.
-          DEVELOPER_DIR=$(xcode-select -p)
-          XCODE_APP="${DEVELOPER_DIR%/Contents/Developer}"
-          echo "Selected Xcode: $XCODE_APP"
-          RUNTIME_JSON=$(xcrun simctl list runtimes available --json | jq -c --arg prefix "$XCODE_APP" '[.runtimes[] | select(.name | startswith("iOS")) | select(.bundlePath | startswith($prefix))][0]')
-          echo "iOS runtime bundled with $XCODE_APP: $RUNTIME_JSON"
+          # Two earlier versions of this fix guessed at which installed
+          # runtime to use and both failed, confirmed directly: (1) picking
+          # whichever available iOS runtime simctl listed first picked iOS
+          # 18.5, mounted from a separate CoreSimulator volume -- simctl
+          # created the device fine, but xcodebuild test still reported
+          # zero iOS Simulator destinations; (2) requiring the runtime's
+          # bundlePath to live under the selected Xcode's own .app bundle
+          # found nothing at all on this runner -- GitHub's own runner
+          # images don't nest simulator runtimes inside the Xcode.app tree,
+          # they mount them as shared volumes regardless of which Xcode
+          # will use them.
+          #
+          # The actual authority on "which Simulator SDK does Xcode 16.1
+          # use" is Xcode itself, via -showsdks -- confirmed against
+          # GitHub's own published runner-images manifest for this exact
+          # image (macos-15-arm64), which documents Xcode 16.1 as paired
+          # with "Simulator - iOS 18.1" (iphonesimulator18.1), not 18.5.
+          # Reading that pairing directly from xcodebuild rather than
+          # hand-copying today's documented version keeps this correct if
+          # the image's Xcode/SDK pairings change later.
+          SDK_VERSION=$(xcodebuild -showsdks -json | jq -r '[.[] | select(.platform == "iphonesimulator")][0].sdkVersion')
+          echo "Xcode's paired iOS Simulator SDK version: $SDK_VERSION"
+          RUNTIME_JSON=$(xcrun simctl list runtimes available --json | jq -c --arg v "$SDK_VERSION" '[.runtimes[] | select(.version == $v)][0]')
+          echo "Matching installed runtime: $RUNTIME_JSON"
           if [ "$RUNTIME_JSON" = "null" ]; then
-            echo "::error::No iOS Simulator runtime bundled with $XCODE_APP was found. Falling back to a runtime from elsewhere on the system is unsafe -- xcodebuild only recognizes runtimes bundled with the selected Xcode as valid destinations (confirmed directly: see this step's header comment)."
+            echo "::error::No installed iOS Simulator runtime matches Xcode's paired SDK version ($SDK_VERSION)."
             exit 1
           fi
           RUNTIME_ID=$(echo "$RUNTIME_JSON" | jq -r '.identifier')
