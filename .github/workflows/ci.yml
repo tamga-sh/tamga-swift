@@ -146,7 +146,14 @@ jobs:
 
       - name: Test on iOS Simulator
         run: |
+          # -scheme Tamga (the bare library target) is not configured for
+          # the test action -- only the aggregate "<PackageName>-Package"
+          # scheme SwiftPM auto-generates includes the test targets.
+          # Confirmed directly: `xcodebuild -list` shows three schemes
+          # (Tamga, Tamga-Package, TamgaObjC); only Tamga-Package's Test
+          # action is populated. Found while fixing the binaryTarget
+          # resolution above -- this was always unreachable before.
           xcodebuild test \
-            -scheme Tamga \
+            -scheme Tamga-Package \
             -destination 'platform=iOS Simulator,name=iPhone 16' \
             -skipMacroValidation
