@@ -5,88 +5,109 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Project
 
 `tamga-swift` is the official Swift SDK for Tamga, with Objective-C interoperability — license
-activation and offline verification for macOS and iOS apps. It is one of two SDKs (with
-`tamga-java`) that do not reimplement Tamga's cryptographic verification logic natively; instead
-it binds to `tamga-c`, the Rust reference implementation exposed through a stable C ABI. Full task
+activation and offline verification for macOS and iOS apps. It reimplements Tamga's cryptographic
+verification logic natively in Swift (CryptoKit + the Security framework) — the same architecture as
+`tamga-python`/`tamga-go`/`tamga-js`/`tamga-dotnet` — so divergence from the Rust reference
+implementation in the crypto sections is a real interop bug, not a style choice. Full task
 breakdown and current build status: [`../docs/plans/tamga-swift.plan.md`](../docs/plans/tamga-swift.plan.md)
 (lives one directory up, in the sibling `tamga-sdk` monorepo, not inside this repo).
 Protocol/feature spec this SDK is built against — every field name, endpoint, and enum value comes
 from here: [`tamga-api/docs/sdk.md`](https://github.com/tamga-sh/tamga-api/blob/main/docs/sdk.md).
 
-**Current state: business logic is still 100% stub; CI/release infra is real.** Package manifest and
-module layout are in place, and CI/release infrastructure is now fully functional, not just
-scaffolded — `build-xcframework.yml` really builds and publishes `TamgaCore.xcframework`, and
-`release.yml`'s two-step flow really populates `Package.swift`'s binary target (see "Local
-Development" and Critical Dependency Notes below). But no HTTP transport, no crypto FFI wiring, and
-no business logic exists yet. Do not assume any method on `TamgaClient` does anything — see the doc
-comment at the top of each stub file for what it will eventually do.
+**Current state: crypto/checkout/proof are real; HTTP client surface is still stub.**
+`Sources/Tamga/Crypto/` (Ed25519, AES-256-GCM, HKDF-SHA256, ECDSA-P256, RSA PKCS1/PSS, the naive
+license-key derivation), `Checkout/` (`LicenseFile`, `MachineFile`), and `Proof.swift`
+(`MachineProof` + `CanonicalJson`) are implemented and tested (115+ tests, 97%+ line coverage). The
+HTTP-facing surface (`TamgaClient`'s endpoint methods, `Transport.swift`, the full JSON:API error
+model, entitlement caching, heartbeat scheduling, the full `Policy` struct) is still stub — see each
+of those files' own doc comments for what's deferred and to which plan section. Do not assume any
+method on `TamgaClient` does anything yet.
 
-## Crypto-Boundary Rule (read before touching `Sources/Tamga/FFI/`)
+Until 2026-08-12 this package instead bound to `tamga-c` (the Rust reference implementation) via a
+C FFI boundary and a `TamgaCore` binary target, mirroring `tamga-java`'s JNI approach — deliberately
+replaced with the native reimplementation above. See "Why native, not bound to tamga-c" below for
+the full rationale; the old XCFramework/binary-target CI machinery this section and "Critical
+Dependency Notes" used to describe is gone, not just out of date.
 
-Only **four** operations cross the C FFI boundary into `tamga-c`:
+## Crypto Architecture
 
-1. Ed25519 verify (license checkout signature check)
-2. AES-256-GCM open (license file decrypt)
-3. HKDF-SHA256 derive (machine file decrypt key derivation)
+The four crypto operations Tamga's protocol needs, and what backs each one in
+`Sources/Tamga/Crypto/`:
+
+1. Ed25519 verify (license checkout signature check) — CryptoKit `Curve25519.Signing`.
+2. AES-256-GCM open (license file decrypt) — CryptoKit `AES.GCM`.
+3. HKDF-SHA256 derive (machine file decrypt key derivation) — CryptoKit `HKDF<SHA256>`.
 4. Multi-scheme verify — Ed25519/RSA-PKCS1/RSA-PSS/ECDSA-P256 (machine checkout) and RSA-PKCS1v15
-   (offline proof)
+   (offline proof) — CryptoKit `P256.Signing` for ECDSA, the **Security framework**'s `SecKey` API
+   for RSA (CryptoKit deliberately does not expose RSA; confirmed against Apple's own docs before
+   writing `Crypto/Rsa.swift` — do not go looking for an RSA type in CryptoKit).
+
+**`Crypto/Ecdsa.swift` has an explicit curve-OID check most callers would not expect to need.**
+Confirmed directly (empirically, not assumed): CryptoKit's
+`P256.Signing.PublicKey(derRepresentation:)` does NOT validate the curve OID in the
+`AlgorithmIdentifier` it parses, only the resulting coordinate byte length. A hand-crafted SPKI
+declaring the secp256k1 curve OID but carrying a real P-256 point's raw coordinates (same 65-byte
+length) is silently accepted by CryptoKit's own parser. `Ecdsa.swift`'s guard (backed by
+`DER.swift`'s minimal OID extractor) is what actually closes this — it is the exact curve-confusion
+bug class a cross-repo security audit of this SDK family found live in
+`tamga-python`/`tamga-go`/`tamga-dotnet`'s generic `ECDsa`-based verifiers, which had no equivalent
+check. Do not remove this guard to "simplify" the type; see `EcdsaTests.swift`'s regression test for
+what it protects against.
 
 **Everything else is hand-rolled, idiomatic Swift.** HTTP transport is built on `URLSession`
-directly — `tamga-c` is never used for networking, JSON:API decoding, or the public client API
-surface. This mirrors `tamga-java` (JNI wraps the same 4 crypto ops; the rest is plain
-Java/OkHttp-equivalent). If you find yourself reaching for `CTamgaShim` outside
-`Sources/Tamga/FFI/*.swift`, stop — that file is importing the C shim in the wrong layer.
+directly — no crypto library is used for networking, JSON:API decoding, or the public client API
+surface.
 
-## Three-Target + Binary-Target Architecture
+## Why native, not bound to tamga-c
+
+`tamga-java` (JNI) still binds to `tamga-c`'s Rust reference implementation for these same 4
+operations; `tamga-swift` deliberately does not, as of 2026-08-12. Both are legitimate designs with
+a real tradeoff, not a strict improvement in one direction — this section exists so a future
+contributor doesn't "fix" one architecture into looking like the other without re-deriving why this
+one was chosen:
+
+- **The original tamga-c-binding design's own stated rationale** (still true, still the reason
+  `tamga-java` keeps it): binding to one audited reference implementation avoids maintaining and
+  security-auditing N independent reimplementations of the same signature/encryption logic. A
+  cross-repo audit of this SDK family found that risk was NOT hypothetical: the same ECDSA
+  curve-confusion bug (see above) was independently present in 3 of 5 from-scratch
+  reimplementations at the time.
+- **The reason it was replaced here anyway**: the binding architecture's cross-platform build/CI
+  cost turned out to be substantial in practice for this specific repo — the XCFramework
+  assembly/distribution pipeline and Xcode-version/iOS-Simulator-runtime CI matching (see
+  `.github/workflows/ci.yml`'s git history for the full account) were a recurring source of CI
+  failures unrelated to the SDK's own correctness. Native CryptoKit/Security-framework code has none
+  of that: no binary target, no XCFramework, no FFI boundary, no version-pairing to get right.
+- **The mitigation for the reintroduced reimplementation risk**: `Ecdsa.swift`'s explicit curve-OID
+  check above, plus mandatory adversarial security review before any crypto-path change merges — the
+  SDK family's standard defense against exactly this risk class, applied here deliberately rather
+  than assumed away.
+
+## Three-Target Architecture
 
 ```
 tamga-swift/
-├── Package.swift                — SPM manifest: 5 targets + 1 binary target
+├── Package.swift                — SPM manifest: 3 targets, no binary target
 ├── Sources/
-│   ├── CTamgaShim/               — C target: makes tamga.h Swift-importable
-│   │   └── include/
-│   │       ├── module.modulemap
-│   │       └── shim.h            — real re-export of tamga.h (tamga-c has shipped v1.0.0/v1.0.1)
-│   ├── Tamga/                    — public Swift API (depends on CTamgaShim only for crypto)
-│   │   ├── TamgaClient.swift     — top-level client: config, all endpoint methods
-│   │   ├── Transport.swift       — URLSession-based HTTP layer, auth headers, content-type dispatch
-│   │   ├── Errors.swift          — TamgaError enum, JSON:API error envelope decoder
-│   │   ├── Proof.swift           — offline proof generate/verify
-│   │   ├── FFI/                  — CTamgaShim wrappers; the ONLY files that import CTamgaShim
-│   │   ├── Models/                — ValidationCode, License, Machine, Policy, ...
-│   │   └── Checkout/               — LicenseFile, MachineFile (PEM parse/verify/decrypt)
+│   ├── Tamga/                    — public Swift API
+│   │   ├── TamgaClient.swift     — top-level client: config, all endpoint methods (stub)
+│   │   ├── Transport.swift       — URLSession-based HTTP layer, auth headers, content-type dispatch (stub)
+│   │   ├── Errors.swift          — TamgaCheckoutError (real); TamgaError HTTP error model (stub)
+│   │   ├── Proof.swift           — MachineProof: offline proof parse/verify
+│   │   ├── CanonicalJson.swift   — recursive alphabetical-key-sorted JSON writer, for Proof
+│   │   ├── Crypto/                — Ed25519, AesGcm, Hkdf, Ecdsa, Rsa, NaiveKey, DER — see "Crypto Architecture" above
+│   │   ├── Models/                — License, Machine, LicenseScheme (real); ValidationCode, full Policy (stub)
+│   │   └── Checkout/               — LicenseFile, MachineFile, PemEnvelope (PEM parse/verify/decrypt)
 │   └── TamgaObjC/                — thin Objective-C interop wrapper over Tamga
 ├── Tests/TamgaTests/             — Swift Testing (import Testing, NOT XCTest)
 ├── Scripts/check-coverage.sh     — hand-written 80% line-coverage gate for CI
 └── .github/workflows/
     ├── ci.yml                    — swiftlint + swift test (macOS) + xcodebuild test (iOS)
-    ├── build-xcframework.yml     — workflow_call → tamga-c build-native.yml → zip → checksum → gh release upload
-    └── release.yml               — release-please + post-release Package.swift bot-commit
+    └── release.yml               — release-please only; no binary-asset publish step (see that file's header comment)
 ```
 
 `tamga-web`-equivalent: there is no server here. `Tamga` is the library target apps link against;
 `TamgaObjC` is a thin wrapper for Objective-C-only consumers, not a separate implementation.
-
-## Local Development
-
-`Package.swift`'s `binaryTarget(url:checksum:)` is populated automatically by `release.yml`'s
-post-release bot commit (see that file's header comment) once `tamga-c` has released and
-`build-xcframework.yml` has run — `tamga-c` has shipped tagged releases (v1.0.0, v1.0.1) and this
-pipeline is real, not a placeholder. If you need to iterate locally against a `tamga-c` checkout
-that hasn't been released yet (e.g. testing an unreleased `tamga-c` change end-to-end before cutting
-a release), build `tamga-c`'s XCFramework locally and swap the binary target:
-
-```swift
-// Comment out the url:/checksum: binaryTarget in Package.swift and use:
-.binaryTarget(
-    name: "TamgaCore",
-    path: "../tamga-c/build/TamgaCore.xcframework"
-),
-```
-
-This requires a sibling checkout of `tamga-c` with its XCFramework already built locally. Do not
-commit the `path:` variant — it only works on a machine with that sibling checkout present. Revert
-to the `url:`/`checksum:` form before pushing.
 
 ## Dev Commands
 
@@ -102,9 +123,8 @@ There is no `just`-style task runner in this repo (unlike `tamga-api`) — SPM's
 are the whole toolchain. `Scripts/check-coverage.sh` is not meant to be run standalone during
 normal dev; it expects `llvm-cov export -summary-only` JSON piped in, exactly as CI invokes it.
 
-**First-time setup**: since `tamga-c` has no release yet, `swift build`/`swift test` will fail to
-resolve `TamgaCore` out of the box. Apply the local-dev `path:` override above against a locally
-built `tamga-c` XCFramework before anything else will compile.
+**First-time setup**: none needed beyond a normal Swift toolchain. `swift build`/`swift test` work
+immediately on a fresh checkout — no sibling repo, no binary target, no local-dev override to apply.
 
 ## GOTCHAS — from `docs/sdk.md`'s "Known Server-Side Gaps"
 
@@ -169,27 +189,21 @@ source doc for the full set, including analytics/EE items that don't touch this 
   not a hardcoded device name, which proved unreliable across GitHub's runner pool. The coverage
   gate lives only in the macOS job, not the iOS one — they're intentionally not double-gated on the
   same threshold.
-- Every `Tamga` type that touches the network or FFI must sit behind a protocol for test doubles
-  (mock `URLSession` via a `MockURLProtocol` harness, mock FFI verifier) — see the
-  `ecc:swift-protocol-di-testing` skill. Do not hit live network or call into the real
-  `CTamgaShim`/`TamgaCore` binary from unit tests.
+- Every `Tamga` type that touches the network must sit behind a protocol for test doubles (mock
+  `URLSession` via a `MockURLProtocol` harness) — see the `ecc:swift-protocol-di-testing` skill. Do
+  not hit live network from unit tests. There is no FFI boundary to mock anymore — `Crypto/` calls
+  CryptoKit/Security directly, and its own tests use real (test-generated) keys and signatures
+  rather than mocking the crypto itself; see `Tests/TamgaTests/Support/` for the shared fixture
+  helpers (`RsaTestKey`, `CheckoutFixture`).
 
 ## Critical Dependency Notes
 
-- **`tamga-c`'s ABI-freeze commitment still governs `shim.h`, but is no longer a blocker.** `tamga-c`
-  has shipped tagged releases (v1.0.0, v1.0.1) with a frozen `tamga.h`, and
-  `Sources/CTamgaShim/include/shim.h` is now a real re-export (`#include <tamga.h>`) rather than a
-  stub — see that file's own header comment. The constraint that still applies going forward: struct
-  layout and function signature changes in `tamga.h` require a version bump on `tamga-c`'s side, no
-  silent breaking changes — do not hand-transcribe `tamga.h` declarations into `shim.h` by hand even
-  now, the `#include` is what keeps this file from ever drifting from `tamga-c`'s actual ABI.
 - **SPM has no central package registry for this SDK** — unlike `tamga-python` (PyPI) or
   `tamga-js` (npm), there is no name-collision concern and no publish step. The git tag *is* the
-  release; `release.yml` and `build-xcframework.yml` are the entire release surface.
-- **Binary-target chicken-and-egg**: `Package.swift`'s checksum can't be computed before the
-  XCFramework asset exists, and the asset can't exist before the tag does. This is why release
-  automation is two workflows, not one — see `release.yml`'s header comment for the full
-  explanation before "simplifying" it into a single job.
+  release; `release.yml` (release-please only) is the entire release surface.
+- **RSA is Security framework, not CryptoKit** — see "Crypto Architecture" above. This is the one
+  crypto primitive in this SDK that doesn't use CryptoKit; don't "simplify" `Crypto/Rsa.swift` by
+  looking for a CryptoKit RSA type that doesn't exist.
 
 ## Branch & Commit Convention
 

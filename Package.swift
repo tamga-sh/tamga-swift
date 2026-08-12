@@ -6,21 +6,19 @@ import PackageDescription
 // Official Swift SDK for Tamga, with Objective-C interoperability.
 //
 // Architecture (see CLAUDE.md for the full rationale):
-//   TamgaCore (binary)  -- tamga-c's prebuilt XCFramework; ONLY the 4 crypto/offline-
-//                          verification primitives (Ed25519 verify, AES-256-GCM open,
-//                          HKDF-SHA256 derive, multi-scheme verify) cross this boundary.
-//   CTamgaShim          -- C target that makes tamga.h Swift-importable via a modulemap.
-//   Tamga               -- public Swift API. Hand-rolls its OWN HTTP transport on
-//                          URLSession; does NOT delegate networking to tamga-c.
-//   TamgaObjC           -- thin Objective-C interop wrapper over Tamga.
-//   TamgaTests          -- Swift Testing (import Testing, NOT XCTest).
+//   Tamga       -- public Swift API. Hand-rolls its own HTTP transport on URLSession.
+//                  All 4 crypto/offline-verification primitives (Ed25519 verify,
+//                  AES-256-GCM open, HKDF-SHA256 derive, multi-scheme verify) are native
+//                  Swift, backed by CryptoKit + the Security framework -- see
+//                  Sources/Tamga/Crypto/. No FFI boundary, no binary target.
+//   TamgaObjC   -- thin Objective-C interop wrapper over Tamga.
+//   TamgaTests  -- Swift Testing (import Testing, NOT XCTest).
 //
-// LOCAL DEV OVERRIDE: tamga-c has not published a release yet, so the binaryTarget
-// below is a placeholder that cannot resolve. Until tamga-c ships v0.1, comment out
-// the `url:`/`checksum:` binaryTarget and use the `path:` one instead, pointed at a
-// locally built XCFramework. See CLAUDE.md's "Local development" section for the
-// exact build command. Do not commit the swap the other direction (path: -> url:)
-// without confirming the checksum matches a real published release asset.
+// Until 2026-08-12 this package instead bound to tamga-c (a Rust reference
+// implementation exposed through a C ABI) for the same 4 operations, via a
+// TamgaCore binaryTarget + CTamgaShim C target. Deliberately replaced with a
+// native reimplementation -- see CLAUDE.md's "Crypto Architecture" section
+// for why, and docs/plans/tamga-swift.plan.md for the full history.
 
 let package = Package(
     name: "Tamga",
@@ -33,25 +31,8 @@ let package = Package(
         .library(name: "TamgaObjC", targets: ["TamgaObjC"]),
     ],
     targets: [
-        // PLACEHOLDER: unresolvable until tamga-c publishes a v0.1 GitHub Release.
-        // Swap for local development:
-        //
-        //   .binaryTarget(
-        //       name: "TamgaCore",
-        //       path: "../tamga-c/build/TamgaCore.xcframework"
-        //   ),
-        .binaryTarget(
-            name: "TamgaCore",
-            url: "https://github.com/tamga-sh/tamga-c/releases/download/vX.Y.Z/TamgaCore.xcframework.zip",
-            checksum: "PLACEHOLDER_UNTIL_TAMGA_C_RELEASES"
-        ),
         .target(
-            name: "CTamgaShim",
-            dependencies: ["TamgaCore"]
-        ),
-        .target(
-            name: "Tamga",
-            dependencies: ["CTamgaShim"]
+            name: "Tamga"
         ),
         .target(
             name: "TamgaObjC",

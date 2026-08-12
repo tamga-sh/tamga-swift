@@ -1,43 +1,27 @@
 name: Release
 
-# Release automation for tamga-swift, in two parts:
+# release-please watches conventional-commit messages on `main` and
+# maintains a standing "Release PR" that accumulates CHANGELOG.md entries
+# and bumps version metadata. Merging that PR cuts a tag + GitHub Release.
 #
-# 1. `release-please` watches conventional-commit messages on `main` and
-#    maintains a standing "Release PR" that accumulates CHANGELOG.md entries
-#    and bumps version metadata. Merging that PR cuts a tag + GitHub Release.
-#    Tag push then triggers build-xcframework.yml (a separate workflow --
-#    see that file) to build and upload the actual XCFramework asset.
-#
-# 2. Once build-xcframework.yml has published the asset, the
-#    `update-package-manifest` job below reads its checksum/URL output and
-#    pushes a bot commit directly to `main` (NOT a new tag) that fills in
-#    Package.swift's `binaryTarget(url:checksum:)` placeholder.
-#
-# WHY TWO STEPS, NOT ONE JOB: SPM's `binaryTarget(url:checksum:)` must point
-# at an already-uploaded release asset with a checksum computed from that
-# exact asset -- but the asset can't be built until the tag/release exists,
-# and the checksum can't be computed until the asset exists. A single job
-# cannot both cut the release and finalize the manifest that describes it.
-# The bot commit lands on `main` (not a new tag) because it is describing
-# the release that already happened, not creating a new one -- a tag whose
-# contents change after the tag is cut would be a correctness hazard for
-# anyone who already resolved the package at that tag. The just-cut tag's
-# Package.swift will have stale placeholder values for the brief window
-# between build-xcframework.yml finishing and this bot commit landing; the
-# *next* tag naturally includes the corrected manifest.
-#
-# NO REGISTRY PUBLISH STEP EXISTS OR IS NEEDED. Unlike npm/PyPI/crates.io,
-# SPM has no central package registry requirement -- the git tag itself is
-# the release artifact from a consumer's point of view;
+# That's the entire release surface. Unlike npm/PyPI/crates.io, SPM has no
+# central package registry requirement -- the git tag itself is the release
+# artifact from a consumer's point of view;
 # `.package(url: "https://github.com/tamga-sh/tamga-swift", from: "<version>")`
-# resolves directly against GitHub's tag list.
+# resolves directly against GitHub's tag list. No packaging/publish step, no
+# binary asset to build or checksum.
+#
+# Until 2026-08-12 this was a two-step flow: a TamgaCore binaryTarget's
+# url:/checksum: had to be patched in by a second job after a separate
+# workflow built and uploaded an XCFramework asset, because SPM's
+# binaryTarget(url:checksum:) can't be computed before the asset it
+# describes exists. That whole chicken-and-egg problem no longer applies --
+# this package has no binary target, no XCFramework, no FFI boundary
+# anymore (see CLAUDE.md's "Crypto Architecture" section).
 
 on:
   push:
     branches: [main]
-  workflow_run:
-    workflows: ["Build XCFramework"]
-    types: [completed]
 
 permissions:
   contents: write
@@ -46,67 +30,8 @@ permissions:
 jobs:
   release-please:
     name: release-please
-    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     steps:
       - uses: googleapis/release-please-action@v4
         with:
           release-type: simple
-
-  # Runs after build-xcframework.yml completes successfully on a tag it was
-  # triggered by. Reads that workflow's checksum/asset-url outputs and
-  # patches Package.swift in place.
-  update-package-manifest:
-    name: Update Package.swift binaryTarget
-    if: github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success'
-    runs-on: ubuntu-latest
-    # Explicit, not inherited from the top-level `permissions:` block — see
-    # tamga-c's package-and-attach job (release.yml) for why: a job-level
-    # `permissions:` omission has silently failed to inherit the
-    # workflow-level default in this SDK family before.
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: main
-
-      # `workflow_run` does not expose the triggering workflow's job
-      # `outputs:` directly -- there is no API field for a run's custom job
-      # outputs, only for its own jobs/logs/artifacts. The reliable handoff
-      # is an artifact: build-xcframework.yml's last step writes
-      # checksum.txt/asset_url.txt and uploads them under the
-      # "xcframework-release-info" name; `run-id:` + `github-token:` here
-      # let download-artifact reach into that OTHER run (by default it can
-      # only see artifacts from the run executing right now).
-      - name: Download checksum + asset URL from build-xcframework.yml run
-        uses: actions/download-artifact@v4
-        with:
-          name: xcframework-release-info
-          path: info
-          run-id: ${{ github.event.workflow_run.id }}
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Read checksum + asset URL
-        id: artifact
-        run: |
-          set -eu
-          echo "checksum=$(cat info/checksum.txt)" >> "$GITHUB_OUTPUT"
-          echo "asset_url=$(cat info/asset_url.txt)" >> "$GITHUB_OUTPUT"
-
-      - name: Patch Package.swift binaryTarget
-        run: |
-          set -eu
-          sed -i \
-            -e "s#url: \".*TamgaCore.xcframework.zip\"#url: \"${{ steps.artifact.outputs.asset_url }}\"#" \
-            -e "s#checksum: \".*\"#checksum: \"${{ steps.artifact.outputs.checksum }}\"#" \
-            Package.swift
-
-      - name: Commit and push to main
-        run: |
-          set -eu
-          git config user.name "tamga-release-bot"
-          git config user.email "release-bot@tamga.sh"
-          git add Package.swift
-          git commit -m "chore: update TamgaCore binaryTarget to ${{ github.event.workflow_run.head_branch }}"
-          git push origin main
