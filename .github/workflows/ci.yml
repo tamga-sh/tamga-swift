@@ -148,22 +148,30 @@ jobs:
         id: sim
         run: |
           set -eu
-          # A hardcoded device name (e.g. "iPhone 16") is brittle -- which
-          # simulator runtimes/devices are pre-installed varies by runner
-          # image and Xcode version, confirmed directly: this exact
-          # combination (macos-15 + Xcode 16.1 selected via
-          # maxim-lobanov/setup-xcode) had NO concrete iOS Simulator device
-          # available, only the "Any iOS Simulator Device" placeholder --
-          # querying simctl for whatever's actually installed and picking
-          # the first available iPhone is more robust than guessing a name.
+          # A hardcoded device name (e.g. "iPhone 16") is brittle, AND
+          # simctl's device list is not a safe substitute -- both confirmed
+          # directly on this exact runner/Xcode combination (macos-15 +
+          # Xcode 16.1 via maxim-lobanov/setup-xcode). A first fix queried
+          # `simctl list devices available` and picked "iPhone 16 Pro"; CI
+          # still failed with that device entirely absent from xcodebuild's
+          # own destination list (not even "ineligible") -- GitHub's runner
+          # images carry simulator devices/runtimes spanning multiple
+          # co-installed Xcode versions, and simctl's registry isn't scoped
+          # to whichever DEVELOPER_DIR is currently selected, but
+          # xcodebuild's destination resolution is. Asking xcodebuild
+          # itself -- the exact command about to run the test -- is the
+          # only way to know what IT considers valid. See
+          # Scripts/find-ios-simulator.py's header for the full account.
           # A separate script file (not embedded Python here) avoids the
           # YAML block-scalar indentation trap that broke an earlier
           # draft of this step (dedented Python lines inside `run: |`
           # terminated the block scalar early -- a real, confirmed parse
           # failure, not a hypothetical one).
-          NAME=$(xcrun simctl list devices available --json | python3 Scripts/find-ios-simulator.py)
-          echo "Using simulator: $NAME"
-          echo "name=$NAME" >> "$GITHUB_OUTPUT"
+          DEST=$(xcodebuild -scheme Tamga-Package -showdestinations 2>&1 | python3 Scripts/find-ios-simulator.py)
+          DEVICE_ID=$(echo "$DEST" | sed -n '1p')
+          DEVICE_NAME=$(echo "$DEST" | sed -n '2p')
+          echo "Using simulator: $DEVICE_NAME ($DEVICE_ID)"
+          echo "id=$DEVICE_ID" >> "$GITHUB_OUTPUT"
 
       - name: Test on iOS Simulator
         run: |
@@ -174,7 +182,11 @@ jobs:
           # (Tamga, Tamga-Package, TamgaObjC); only Tamga-Package's Test
           # action is populated. Found while fixing the binaryTarget
           # resolution above -- this was always unreachable before.
+          #
+          # Destination is selected by id (a stable per-instance UUID), not
+          # name -- see the previous step and Scripts/find-ios-simulator.py
+          # for why a name match isn't reliable on this runner image.
           xcodebuild test \
             -scheme Tamga-Package \
-            -destination "platform=iOS Simulator,name=${{ steps.sim.outputs.name }}" \
+            -destination "platform=iOS Simulator,id=${{ steps.sim.outputs.id }}" \
             -skipMacroValidation
