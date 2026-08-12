@@ -69,6 +69,23 @@ enum CheckoutFixture {
         return Data(json.utf8)
     }
 
+    /// A `{"data": {...}}` license-resource payload exercising every field
+    /// `License` models, including timestamps and metadata -- unlike
+    /// `licensePayloadJSON` above, which omits them (they're all Optional,
+    /// so a minimal fixture never exercises their decode path at all).
+    static func fullLicensePayloadJSON(key: String = "TEST-LICENSE-KEY") -> Data {
+        let json = """
+        {"data":{"id":"lic_123","type":"licenses","attributes":{
+          "key":"\(key)","suspended":false,"uses":3,
+          "expiry":"2027-01-01T00:00:00Z",
+          "last_validated_at":"2026-08-01T12:00:00.500Z",
+          "last_check_in_at":"2026-07-15T09:30:00Z",
+          "metadata":{"seats":5,"tier":"pro","trial":false,"note":null}
+        }}}
+        """
+        return Data(json.utf8)
+    }
+
     /// A minimal, valid `{"data": {...}}` machine-resource JSON payload.
     static func machinePayloadJSON(fingerprint: String = "fp-abc123") -> Data {
         let json = """

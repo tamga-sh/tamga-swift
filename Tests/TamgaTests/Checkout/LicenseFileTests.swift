@@ -21,6 +21,27 @@ struct LicenseFileTests {
         #expect(try file.verify(publicKey: key.publicKey.rawRepresentation))
     }
 
+    @Test("verifyAndDecrypt decodes every License field -- timestamps and metadata included")
+    func verifyAndDecryptDecodesFullLicenseFieldSet() throws {
+        let key = Curve25519.Signing.PrivateKey()
+        let json = CheckoutFixture.fullLicensePayloadJSON(key: "TAMGA-FULL-FIELDS")
+        let enc = CheckoutFixture.plainEnc(json: json)
+        let sig = CheckoutFixture.ed25519Sign(enc: enc, privateKey: key)
+        let pem = CheckoutFixture.wrapInPEM(certificate: .init(enc: enc, sig: sig, alg: "base64+ed25519"), beginMarker: Self.begin, endMarker: Self.end)
+
+        let file = try LicenseFile.parse(pem)
+        let license = try file.verifyAndDecrypt(publicKey: key.publicKey.rawRepresentation, licenseKey: "unused-for-plain")
+
+        #expect(license.uses == 3)
+        #expect(license.expiry != nil)
+        #expect(license.lastValidatedAt != nil)
+        #expect(license.lastCheckInAt != nil)
+        #expect(license.metadata?["seats"] == .int(5))
+        #expect(license.metadata?["tier"] == .string("pro"))
+        #expect(license.metadata?["trial"] == .bool(false))
+        #expect(license.metadata?["note"] == .null)
+    }
+
     @Test("verifyAndDecrypt returns the embedded License for a valid plain file")
     func verifyAndDecryptReturnsLicenseForPlainFile() throws {
         let key = Curve25519.Signing.PrivateKey()
