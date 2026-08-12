@@ -50,7 +50,7 @@ struct MachineFileCertificate: Decodable {
 /// RSA and ECDSA public keys are expected in X.509 `SubjectPublicKeyInfo`
 /// DER encoding; Ed25519 public keys are raw 32-byte keys, matching
 /// `LicenseFile`.
-public struct MachineFile {
+public struct MachineFile: Sendable {
     private static let beginMarker = "-----BEGIN MACHINE FILE-----"
     private static let endMarker = "-----END MACHINE FILE-----"
 
@@ -74,7 +74,7 @@ public struct MachineFile {
 
         let certificate: MachineFileCertificate
         do {
-            certificate = try JSONDecoder().decode(MachineFileCertificate.self, from: jsonBytes)
+            certificate = try TamgaJSONCoding.decoder.decode(MachineFileCertificate.self, from: jsonBytes)
         } catch {
             throw TamgaCheckoutError.offlineFileFormat("Machine file certificate JSON is malformed: \(error)")
         }
@@ -143,6 +143,17 @@ public struct MachineFile {
             throw TamgaCheckoutError.offlineFileFormat("Machine file 'enc' is not valid base64.")
         }
 
+        // Substring matching, NOT exact equality, is intentional and
+        // required here -- unlike LicenseFile's fixed 2-literal `alg` space,
+        // MachineFile's `alg` is a compound encryption-prefix +
+        // signature-suffix string across 5 possible schemes (e.g.
+        // "aes-256-gcm+ed25519", "rsa-sha256", "ecdsa-sha256"), so there is
+        // no single fixed literal set to match exactly. Matches
+        // tamga-dotnet's reference `MachineFile.Contains(...)` pattern
+        // exactly (confirmed by direct comparison against
+        // Tamga.Sdk/Checkout/MachineFile.cs). `alg` is never used for
+        // signature-scheme dispatch (see `verify(scheme:publicKey:)` above)
+        // -- only for this encrypted-vs-plain payload gating.
         let jsonBytes: Data
         if certificate.alg.contains("aes-256-gcm") {
             jsonBytes = try Self.decryptPayload(payloadBytes, licenseKey: licenseKey, fingerprint: fingerprint)
@@ -163,24 +174,7 @@ public struct MachineFile {
     }
 
     private static func decryptPayload(_ payloadBytes: Data, licenseKey: String, fingerprint: String) throws -> Data {
-        let minLength = AesGcmCipher.nonceLength + AesGcmCipher.tagLength
-        guard payloadBytes.count >= minLength else {
-            throw TamgaCheckoutError.offlineFileFormat(
-                "Encrypted machine file payload too short: expected at least \(minLength) bytes, " +
-                "got \(payloadBytes.count)."
-            )
-        }
-
-        let nonce = payloadBytes.prefix(AesGcmCipher.nonceLength)
-        let tag = payloadBytes.suffix(AesGcmCipher.tagLength)
-        let ciphertext = payloadBytes.dropFirst(AesGcmCipher.nonceLength).dropLast(AesGcmCipher.tagLength)
-
         let key = Hkdf.deriveMachineFileKey(licenseKey: licenseKey, fingerprint: fingerprint)
-
-        do {
-            return try AesGcmCipher.open(key: key, nonce: nonce, ciphertext: ciphertext, tag: tag)
-        } catch {
-            throw TamgaCheckoutError.signatureVerificationFailed
-        }
+        return try EncryptedPayloadDecryptor.decrypt(payloadBytes, key: key, context: "Encrypted machine file")
     }
 }

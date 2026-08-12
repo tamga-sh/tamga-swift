@@ -77,7 +77,7 @@ struct LicenseFileTests {
         #expect(license.key == licenseKey)
     }
 
-    @Test("verifyAndDecrypt throws signatureVerificationFailed for the wrong license key on an encrypted file")
+    @Test("verifyAndDecrypt throws decryptionFailed for the wrong license key on an encrypted file")
     func verifyAndDecryptThrowsForWrongLicenseKey() throws {
         let signingKey = Curve25519.Signing.PrivateKey()
         let aesKey = NaiveKey.derive(licenseKey: "REAL-KEY")
@@ -87,7 +87,13 @@ struct LicenseFileTests {
         let pem = CheckoutFixture.wrapLicensePEM(enc: enc, sig: sig, alg: "aes-256-gcm+ed25519")
 
         let file = try LicenseFile.parse(pem)
-        #expect(throws: TamgaCheckoutError.signatureVerificationFailed) {
+        // Distinct from signatureVerificationFailed -- the Ed25519 signature
+        // over `enc` is genuinely valid here; only the AES-GCM decrypt step
+        // (wrong key) fails. See TamgaCheckoutError.decryptionFailed's docs.
+        let expectedMessage =
+            "Encrypted license file failed to decrypt -- verify the license key (and fingerprint, for machine " +
+            "files) are correct, or the file may be corrupted."
+        #expect(throws: TamgaCheckoutError.decryptionFailed(expectedMessage)) {
             _ = try file.verifyAndDecrypt(publicKey: signingKey.publicKey.rawRepresentation, licenseKey: "WRONG-KEY")
         }
     }
@@ -164,10 +170,29 @@ struct LicenseFileTests {
         // beginMarker.count + endMarker.count that still independently
         // satisfies hasPrefix/hasSuffix must not crash the length
         // computation -- see PemEnvelope.swift's guard.
+        //
+        // Construction: beginMarker + endMarker.dropFirst(5). beginMarker's
+        // own trailing 5 dashes double as endMarker's leading 5 dashes, so
+        // the 49-char result independently satisfies hasPrefix(beginMarker)
+        // (true by construction) AND hasSuffix(endMarker) (its last 26
+        // characters reassemble endMarker byte-for-byte: beginMarker's
+        // trailing "-----" + endMarker.dropFirst(5)'s "END LICENSE
+        // FILE-----" == endMarker) -- while being 5 bytes shorter than
+        // beginMarker.count + endMarker.count (28 + 26 = 54), which is
+        // exactly the condition the length guard exists to catch.
+        //
+        // CORRECTNESS regression (on the test itself, not the guard): a
+        // prior version of this test used `begin.prefix(10) +
+        // end.suffix(10)`, which -- confirmed by direct inspection --
+        // doesn't even satisfy hasPrefix(beginMarker), so it fails at the
+        // guard on line 7 of PemEnvelope.swift ("missing begin marker")
+        // and never reaches the length guard at all. It passed, but for the
+        // wrong reason: coverage showed the length-guard lines as never hit.
         let begin = "-----BEGIN LICENSE FILE-----"
         let end = "-----END LICENSE FILE-----"
+        let overlapping = begin + end.dropFirst(5)
         #expect(throws: TamgaCheckoutError.self) {
-            _ = try LicenseFile.parse(String(begin.prefix(10)) + String(end.suffix(10)))
+            _ = try LicenseFile.parse(overlapping)
         }
     }
 
@@ -176,6 +201,66 @@ struct LicenseFileTests {
         let pem = "-----BEGIN LICENSE FILE-----\nnot valid base64!!!\n-----END LICENSE FILE-----"
         #expect(throws: TamgaCheckoutError.self) {
             _ = try LicenseFile.parse(pem)
+        }
+    }
+
+    @Test("parse throws offlineFileFormat for a body that's valid base64 but not valid certificate JSON")
+    func parseThrowsForMalformedCertificateJSON() {
+        let body = Data("not a certificate".utf8).base64EncodedString()
+        let pem = "-----BEGIN LICENSE FILE-----\n\(body)\n-----END LICENSE FILE-----"
+        #expect(throws: TamgaCheckoutError.self) {
+            _ = try LicenseFile.parse(pem)
+        }
+    }
+
+    @Test("verify returns false for a malformed base64 signature")
+    func verifyReturnsFalseForMalformedBase64Signature() throws {
+        let key = Curve25519.Signing.PrivateKey()
+        let pem = CheckoutFixture.wrapLicensePEM(enc: "AA==", sig: "not valid base64!!!", alg: "base64+ed25519")
+
+        let file = try LicenseFile.parse(pem)
+        #expect(try !file.verify(publicKey: key.publicKey.rawRepresentation))
+    }
+
+    @Test("verifyAndDecrypt throws offlineFileFormat when enc is not valid base64")
+    func verifyAndDecryptThrowsForMalformedEncBase64() throws {
+        // Ed25519 signs arbitrary bytes regardless of whether they happen to
+        // be valid base64, so `verify()` succeeds here -- the malformed-base64
+        // failure is specific to verifyAndDecrypt's own decode step.
+        let key = Curve25519.Signing.PrivateKey()
+        let enc = "not valid base64!!!"
+        let sig = CheckoutFixture.ed25519Sign(enc: enc, privateKey: key)
+        let pem = CheckoutFixture.wrapLicensePEM(enc: enc, sig: sig, alg: "base64+ed25519")
+
+        let file = try LicenseFile.parse(pem)
+        #expect(throws: TamgaCheckoutError.self) {
+            _ = try file.verifyAndDecrypt(publicKey: key.publicKey.rawRepresentation, licenseKey: "unused")
+        }
+    }
+
+    @Test("verifyAndDecrypt throws offlineFileFormat for a decoded payload that's not valid resource JSON")
+    func verifyAndDecryptThrowsForMalformedPayloadJSON() throws {
+        let key = Curve25519.Signing.PrivateKey()
+        let enc = Data("not resource json".utf8).base64EncodedString()
+        let sig = CheckoutFixture.ed25519Sign(enc: enc, privateKey: key)
+        let pem = CheckoutFixture.wrapLicensePEM(enc: enc, sig: sig, alg: "base64+ed25519")
+
+        let file = try LicenseFile.parse(pem)
+        #expect(throws: TamgaCheckoutError.self) {
+            _ = try file.verifyAndDecrypt(publicKey: key.publicKey.rawRepresentation, licenseKey: "unused")
+        }
+    }
+
+    @Test("verifyAndDecrypt throws offlineFileFormat for an encrypted payload shorter than nonce+tag")
+    func verifyAndDecryptThrowsForShortEncryptedPayload() throws {
+        let key = Curve25519.Signing.PrivateKey()
+        let enc = Data([0x01, 0x02, 0x03]).base64EncodedString() // far shorter than 12+16 bytes
+        let sig = CheckoutFixture.ed25519Sign(enc: enc, privateKey: key)
+        let pem = CheckoutFixture.wrapLicensePEM(enc: enc, sig: sig, alg: "aes-256-gcm+ed25519")
+
+        let file = try LicenseFile.parse(pem)
+        #expect(throws: TamgaCheckoutError.self) {
+            _ = try file.verifyAndDecrypt(publicKey: key.publicKey.rawRepresentation, licenseKey: "unused")
         }
     }
 }

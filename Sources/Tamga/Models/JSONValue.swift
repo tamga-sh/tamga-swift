@@ -17,7 +17,15 @@ import Foundation
 /// contained, breaking `Proof` signature verification for any dataset with
 /// an integer field. Decoding tries `Int64` before `Double` so a wire value
 /// like `"42"` decodes as `.int(42)`, not `.double(42.0)`.
-public indirect enum JSONValue: Codable, Equatable, Sendable {
+///
+/// NOT `indirect` at the type level -- `.object([String: JSONValue])` and
+/// `.array([JSONValue])` already get their own heap indirection for free
+/// from `Dictionary`/`Array`'s own COW buffer storage, so the enum itself
+/// never needs boxing to be finite-sized. A type-level `indirect` would
+/// force every case, including the common leaf cases (`.string`, `.int`,
+/// `.bool`, ...), onto the heap unnecessarily -- confirmed removing it
+/// entirely still builds and every `JSONValue` test still passes.
+public enum JSONValue: Codable, Equatable, Sendable {
     case string(String)
     case int(Int64)
     case double(Double)

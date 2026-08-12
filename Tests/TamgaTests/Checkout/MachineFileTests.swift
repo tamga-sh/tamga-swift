@@ -92,6 +92,25 @@ struct MachineFileTests {
         }
     }
 
+    @Test("verifyAndDecrypt returns the embedded Machine for a valid plain (unencrypted) file")
+    func verifyAndDecryptReturnsMachineForPlainFile() throws {
+        let signingKey = Curve25519.Signing.PrivateKey()
+        let fingerprint = "plain-fingerprint-xyz"
+        let json = CheckoutFixture.machinePayloadJSON(fingerprint: fingerprint)
+        let enc = CheckoutFixture.plainEnc(json: json)
+        let sig = CheckoutFixture.ed25519Sign(enc: enc, privateKey: signingKey)
+        let pem = CheckoutFixture.wrapMachinePEM(enc: enc, sig: sig, alg: "base64+ed25519")
+
+        let file = try MachineFile.parse(pem)
+        let machine = try file.verifyAndDecrypt(
+            scheme: .ed25519Sign, publicKey: signingKey.publicKey.rawRepresentation,
+            licenseKey: "unused-for-plain", fingerprint: fingerprint
+        )
+
+        #expect(machine.id == "mach_123")
+        #expect(machine.fingerprint == fingerprint)
+    }
+
     @Test("verifyAndDecrypt returns the embedded Machine for a valid encrypted file")
     func verifyAndDecryptReturnsMachineForEncryptedFile() throws {
         let signingKey = Curve25519.Signing.PrivateKey()
@@ -113,7 +132,7 @@ struct MachineFileTests {
         #expect(machine.fingerprint == fingerprint)
     }
 
-    @Test("verifyAndDecrypt throws signatureVerificationFailed for the wrong fingerprint on an encrypted file")
+    @Test("verifyAndDecrypt throws decryptionFailed for the wrong fingerprint on an encrypted file")
     func verifyAndDecryptThrowsForWrongFingerprint() throws {
         // GOTCHA regression: machine-file decryption binds BOTH the license
         // key AND the fingerprint via HKDF's `info` parameter -- a correct
@@ -128,10 +147,97 @@ struct MachineFileTests {
         let pem = CheckoutFixture.wrapMachinePEM(enc: enc, sig: sig, alg: "aes-256-gcm+ed25519")
 
         let file = try MachineFile.parse(pem)
-        #expect(throws: TamgaCheckoutError.signatureVerificationFailed) {
+        // Distinct from signatureVerificationFailed -- the Ed25519 signature
+        // over `enc` is genuinely valid here; only the AES-GCM decrypt step
+        // (HKDF derives a different key for the wrong fingerprint) fails.
+        let expectedMessage =
+            "Encrypted machine file failed to decrypt -- verify the license key (and fingerprint, for machine " +
+            "files) are correct, or the file may be corrupted."
+        #expect(throws: TamgaCheckoutError.decryptionFailed(expectedMessage)) {
             _ = try file.verifyAndDecrypt(
                 scheme: .ed25519Sign, publicKey: signingKey.publicKey.rawRepresentation,
                 licenseKey: licenseKey, fingerprint: "wrong-fingerprint"
+            )
+        }
+    }
+
+    @Test("parse throws offlineFileFormat for a missing BEGIN marker")
+    func parseThrowsForMissingBeginMarker() {
+        #expect(throws: TamgaCheckoutError.self) {
+            _ = try MachineFile.parse("not a pem file\n-----END MACHINE FILE-----")
+        }
+    }
+
+    @Test("parse throws offlineFileFormat for malformed base64 body")
+    func parseThrowsForMalformedBase64() {
+        let pem = "-----BEGIN MACHINE FILE-----\nnot valid base64!!!\n-----END MACHINE FILE-----"
+        #expect(throws: TamgaCheckoutError.self) {
+            _ = try MachineFile.parse(pem)
+        }
+    }
+
+    @Test("parse throws offlineFileFormat for a body that's valid base64 but not valid certificate JSON")
+    func parseThrowsForMalformedCertificateJSON() {
+        let body = Data("not a certificate".utf8).base64EncodedString()
+        let pem = "-----BEGIN MACHINE FILE-----\n\(body)\n-----END MACHINE FILE-----"
+        #expect(throws: TamgaCheckoutError.self) {
+            _ = try MachineFile.parse(pem)
+        }
+    }
+
+    @Test("verify returns false for a malformed base64 signature")
+    func verifyReturnsFalseForMalformedBase64Signature() throws {
+        let key = Curve25519.Signing.PrivateKey()
+        let pem = CheckoutFixture.wrapMachinePEM(enc: "AA==", sig: "not valid base64!!!", alg: "base64+ed25519")
+
+        let file = try MachineFile.parse(pem)
+        #expect(try !file.verify(scheme: .ed25519Sign, publicKey: key.publicKey.rawRepresentation))
+    }
+
+    @Test("verifyAndDecrypt throws offlineFileFormat when enc is not valid base64")
+    func verifyAndDecryptThrowsForMalformedEncBase64() throws {
+        let key = Curve25519.Signing.PrivateKey()
+        let enc = "not valid base64!!!"
+        let sig = CheckoutFixture.ed25519Sign(enc: enc, privateKey: key)
+        let pem = CheckoutFixture.wrapMachinePEM(enc: enc, sig: sig, alg: "base64+ed25519")
+
+        let file = try MachineFile.parse(pem)
+        #expect(throws: TamgaCheckoutError.self) {
+            _ = try file.verifyAndDecrypt(
+                scheme: .ed25519Sign, publicKey: key.publicKey.rawRepresentation,
+                licenseKey: "unused", fingerprint: "unused"
+            )
+        }
+    }
+
+    @Test("verifyAndDecrypt throws offlineFileFormat for a decoded payload that's not valid resource JSON")
+    func verifyAndDecryptThrowsForMalformedPayloadJSON() throws {
+        let key = Curve25519.Signing.PrivateKey()
+        let enc = Data("not resource json".utf8).base64EncodedString()
+        let sig = CheckoutFixture.ed25519Sign(enc: enc, privateKey: key)
+        let pem = CheckoutFixture.wrapMachinePEM(enc: enc, sig: sig, alg: "base64+ed25519")
+
+        let file = try MachineFile.parse(pem)
+        #expect(throws: TamgaCheckoutError.self) {
+            _ = try file.verifyAndDecrypt(
+                scheme: .ed25519Sign, publicKey: key.publicKey.rawRepresentation,
+                licenseKey: "unused", fingerprint: "unused"
+            )
+        }
+    }
+
+    @Test("verifyAndDecrypt throws offlineFileFormat for an encrypted payload shorter than nonce+tag")
+    func verifyAndDecryptThrowsForShortEncryptedPayload() throws {
+        let key = Curve25519.Signing.PrivateKey()
+        let enc = Data([0x01, 0x02, 0x03]).base64EncodedString() // far shorter than 12+16 bytes
+        let sig = CheckoutFixture.ed25519Sign(enc: enc, privateKey: key)
+        let pem = CheckoutFixture.wrapMachinePEM(enc: enc, sig: sig, alg: "aes-256-gcm+ed25519")
+
+        let file = try MachineFile.parse(pem)
+        #expect(throws: TamgaCheckoutError.self) {
+            _ = try file.verifyAndDecrypt(
+                scheme: .ed25519Sign, publicKey: key.publicKey.rawRepresentation,
+                licenseKey: "unused", fingerprint: "unused"
             )
         }
     }

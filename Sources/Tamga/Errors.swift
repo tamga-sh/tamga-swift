@@ -50,6 +50,15 @@ public enum TamgaCheckoutError: Error, Equatable {
     case offlineFileFormat(String)
     /// Signature verification failed -- the file may be forged or corrupted.
     case signatureVerificationFailed
+    /// Decryption failed AFTER a successful signature check -- almost always
+    /// the wrong license key (license files) or the wrong license
+    /// key/fingerprint pair (machine files), occasionally payload
+    /// corruption. Kept distinct from `signatureVerificationFailed` so a
+    /// caller can react differently ("check your license key" vs. "this
+    /// file may be forged/tampered") -- unlike a network-facing oracle,
+    /// there's no adversary benefit to collapsing the two for a file the
+    /// user already has in hand.
+    case decryptionFailed(String)
     /// The certificate's `alg` field, or a caller-supplied scheme, isn't
     /// recognized.
     case unsupportedAlgorithm(String)
@@ -59,4 +68,23 @@ public enum TamgaCheckoutError: Error, Equatable {
     /// Client-side mirror of the server's `422 TTL_INVALID`: `ttl` must be
     /// `> 0 && <= 31536000` (365 days).
     case ttlInvalid(String)
+}
+
+extension TamgaCheckoutError: LocalizedError {
+    public var errorDescription: String? {
+        switch self {
+        case .offlineFileFormat(let message):
+            return message
+        case .signatureVerificationFailed:
+            return "Signature verification failed -- the file may be forged or corrupted."
+        case .decryptionFailed(let message):
+            return message
+        case .unsupportedAlgorithm(let message):
+            return message
+        case .schemeNotSupported(let message):
+            return message
+        case .ttlInvalid(let message):
+            return message
+        }
+    }
 }

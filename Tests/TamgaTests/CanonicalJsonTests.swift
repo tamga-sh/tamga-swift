@@ -80,6 +80,17 @@ struct CanonicalJsonTests {
         #expect(CanonicalJson.serialize(.string("a/b")) == #""a/b""#)
     }
 
+    @Test("control characters outside the short-escape set become \\u00XX")
+    func escapesRawControlCharactersAsUnicodeEscapes() {
+        // Byte-exact-critical for RSA proof-signature verification: any
+        // dataset field containing a raw control character (distinct from
+        // the short-escape set \n\r\t\u{08}\u{0C} covered above) must
+        // round-trip through the exact \u00XX form serde_json produces.
+        #expect(CanonicalJson.serialize(.string("\u{01}")) == "\"\\u0001\"")
+        #expect(CanonicalJson.serialize(.string("\u{1F}")) == "\"\\u001f\"")
+        #expect(CanonicalJson.serialize(.string("a\u{00}b")) == "\"a\\u0000b\"")
+    }
+
     @Test("null and bool serialize as their JSON literals")
     func serializesNullAndBool() {
         #expect(CanonicalJson.serialize(.null) == "null")

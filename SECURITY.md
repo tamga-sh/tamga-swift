@@ -2,13 +2,14 @@
 
 ## Scope
 
-`tamga-swift` binds to `tamga-c`'s stable C ABI rather than reimplementing crypto natively. Only four operations cross the FFI boundary — see `CLAUDE.md`'s "Crypto-Boundary Rule". The highest-risk code lives in:
+`tamga-swift` reimplements Tamga's offline verification cryptography natively in Swift, using Apple's CryptoKit and Security frameworks exclusively — no third-party crypto dependency, no C FFI. See `CLAUDE.md`'s "Crypto Architecture" section for the full rationale and primitive-by-primitive mapping. The highest-risk code lives in:
 
-- [`Sources/Tamga/FFI/`](Sources/Tamga/FFI/) — the `CTamgaShim` wrapper layer; the only files allowed to import the C shim.
+- [`Sources/Tamga/Crypto/`](Sources/Tamga/Crypto/) — Ed25519, AES-256-GCM, HKDF-SHA256, ECDSA-P256, and RSA (PKCS#1v1.5/PSS) verification primitives.
 - [`Sources/Tamga/Checkout/`](Sources/Tamga/Checkout/) — `.lic`/`.machine` file parse/verify/decrypt.
-- [`Sources/Tamga/Proof.swift`](Sources/Tamga/Proof.swift) — offline proof.
+- [`Sources/Tamga/Proof.swift`](Sources/Tamga/Proof.swift) — offline proof verification.
+- [`Sources/Tamga/CanonicalJson.swift`](Sources/Tamga/CanonicalJson.swift) — the canonical JSON serializer the offline-proof signature covers.
 
-Note: as of this writing, `tamga-swift` is pre-release scaffolding blocked on `tamga-c`'s ABI freeze — no FFI wiring or business logic exists yet, so most reports will not apply until real implementation lands.
+Out of scope for now: the full `TamgaClient` HTTP-facing surface (entitlements, heartbeat scheduling, the JSON:API error envelope) is still deferred to a future session — see the scope notes in `Errors.swift`, `Models/License.swift`, `Models/Machine.swift`, and `Models/Policy.swift`.
 
 ## Supported Versions
 
@@ -51,7 +52,19 @@ them will be closed without action (though corrections/clarifications are
 welcome):
 
 - The `.lic` file's encryption key derivation is a zero-pad/truncate
-  transform, not a real KDF. This is mandated by server wire compatibility.
+  transform (`NaiveKey`), not a real KDF — mandated by server wire
+  compatibility. The `.machine` file uses real HKDF-SHA256 (`Hkdf`) instead;
+  the two are never interchangeable.
+- The certificate's `alg` field is read but not itself covered by the
+  signature (only `enc` is signed) — it's used solely to choose
+  AES-GCM-decrypt vs. plain-decode, never to select the signature verifier
+  (that's always Ed25519 for license files, and always the caller-supplied
+  scheme, never the file's own `alg`, for machine files). Flipping `alg` on
+  an otherwise-validly-signed file fails closed in both directions
+  (ciphertext misread as plaintext JSON fails to parse; plaintext misread as
+  `nonce||ciphertext||tag` fails the AES-GCM tag check) — this is an
+  accepted wire-format tradeoff shared with the other Tamga SDKs, not an
+  oversight.
 - Auth is not currently enforced server-side on the license/machine
   validate/check-in endpoints (a server-side gap, not a client-side one) —
   this SDK still always sends its configured credentials for

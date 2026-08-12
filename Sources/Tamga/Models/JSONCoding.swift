@@ -22,6 +22,27 @@ enum TamgaJSONCoding {
     }()
 }
 
+/// Shared, pre-configured formatters -- `ISO8601DateFormatter` is safe for
+/// concurrent read-only use (`.date(from:)`/`.string(from:)`) once
+/// configured, since none of its `formatOptions`/etc. are ever mutated after
+/// creation here. Avoids allocating a fresh formatter on every single
+/// decode/encode call. `nonisolated(unsafe)` because `ISO8601DateFormatter`
+/// (an `NSObject` subclass) isn't `Sendable`-audited by the SDK, even though
+/// this particular usage pattern (configure once, never mutate, read-only
+/// after) is safe -- confirmed by building under this package's
+/// `swift-tools-version:6.0` Swift 6 language mode.
+nonisolated(unsafe) private let iso8601FormatterWithFractionalSeconds: ISO8601DateFormatter = {
+    let formatter = ISO8601DateFormatter()
+    formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+    return formatter
+}()
+
+nonisolated(unsafe) private let iso8601FormatterWithoutFractionalSeconds: ISO8601DateFormatter = {
+    let formatter = ISO8601DateFormatter()
+    formatter.formatOptions = [.withInternetDateTime]
+    return formatter
+}()
+
 extension JSONDecoder.DateDecodingStrategy {
     /// ISO 8601 with optional fractional seconds -- `DateFormatter`/
     /// `ISO8601DateFormatter`'s default `.withInternetDateTime` option set
@@ -32,15 +53,10 @@ extension JSONDecoder.DateDecodingStrategy {
         let container = try decoder.singleValueContainer()
         let string = try container.decode(String.self)
 
-        let withFractional = ISO8601DateFormatter()
-        withFractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        if let date = withFractional.date(from: string) {
+        if let date = iso8601FormatterWithFractionalSeconds.date(from: string) {
             return date
         }
-
-        let withoutFractional = ISO8601DateFormatter()
-        withoutFractional.formatOptions = [.withInternetDateTime]
-        if let date = withoutFractional.date(from: string) {
+        if let date = iso8601FormatterWithoutFractionalSeconds.date(from: string) {
             return date
         }
 
@@ -52,9 +68,7 @@ extension JSONDecoder.DateDecodingStrategy {
 
 extension JSONEncoder.DateEncodingStrategy {
     static let iso8601WithFractionalSeconds = JSONEncoder.DateEncodingStrategy.custom { date, encoder in
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         var container = encoder.singleValueContainer()
-        try container.encode(formatter.string(from: date))
+        try container.encode(iso8601FormatterWithFractionalSeconds.string(from: date))
     }
 }

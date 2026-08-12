@@ -41,7 +41,7 @@ struct LicenseFileCertificate: Decodable {
 /// the signed payload and NOT re-checked server-side on later validation --
 /// expiry enforcement for an offline file is entirely this SDK's
 /// client-side responsibility.
-public struct LicenseFile {
+public struct LicenseFile: Sendable {
     private static let beginMarker = "-----BEGIN LICENSE FILE-----"
     private static let endMarker = "-----END LICENSE FILE-----"
 
@@ -63,7 +63,7 @@ public struct LicenseFile {
 
         let certificate: LicenseFileCertificate
         do {
-            certificate = try JSONDecoder().decode(LicenseFileCertificate.self, from: jsonBytes)
+            certificate = try TamgaJSONCoding.decoder.decode(LicenseFileCertificate.self, from: jsonBytes)
         } catch {
             throw TamgaCheckoutError.offlineFileFormat("License file certificate JSON is malformed: \(error)")
         }
@@ -79,7 +79,14 @@ public struct LicenseFile {
     /// - Throws: `TamgaCheckoutError.unsupportedAlgorithm` if `alg` does not
     ///   contain `"ed25519"`.
     public func verify(publicKey: Data) throws -> Bool {
-        guard certificate.alg.contains("ed25519") else {
+        // Exact match against the two documented literal values (see
+        // type-level remarks) rather than substring matching -- unlike
+        // MachineFile's `alg`, which is a compound
+        // encryption-prefix/signature-suffix string across 5 schemes,
+        // LicenseFile's `alg` is always ed25519 and always one of exactly
+        // these two literals, so exact equality is both correct and
+        // stricter.
+        guard certificate.alg == "base64+ed25519" || certificate.alg == "aes-256-gcm+ed25519" else {
             throw TamgaCheckoutError.unsupportedAlgorithm(
                 "Unsupported license file algorithm: '\(certificate.alg)'. " +
                 "Only ed25519-signed license files are supported."
@@ -117,11 +124,17 @@ public struct LicenseFile {
         }
 
         let jsonBytes: Data
-        if certificate.alg.contains("aes-256-gcm") {
+        switch certificate.alg {
+        case "aes-256-gcm+ed25519":
             jsonBytes = try Self.decryptPayload(payloadBytes, licenseKey: licenseKey)
-        } else if certificate.alg.contains("base64") {
+        case "base64+ed25519":
             jsonBytes = payloadBytes
-        } else {
+        default:
+            // Defensive: unreachable in practice since `verify(publicKey:)`
+            // above already validated `alg` is one of these two exact
+            // literals and this method throws immediately if that fails --
+            // kept as an explicit fail-closed branch rather than relying on
+            // that ordering never changing.
             throw TamgaCheckoutError.unsupportedAlgorithm("Unsupported license file algorithm: '\(certificate.alg)'.")
         }
 
@@ -136,27 +149,10 @@ public struct LicenseFile {
     }
 
     private static func decryptPayload(_ payloadBytes: Data, licenseKey: String) throws -> Data {
-        let minLength = AesGcmCipher.nonceLength + AesGcmCipher.tagLength
-        guard payloadBytes.count >= minLength else {
-            throw TamgaCheckoutError.offlineFileFormat(
-                "Encrypted license file payload too short: expected at least \(minLength) bytes, " +
-                "got \(payloadBytes.count)."
-            )
-        }
-
-        let nonce = payloadBytes.prefix(AesGcmCipher.nonceLength)
-        let tag = payloadBytes.suffix(AesGcmCipher.tagLength)
-        let ciphertext = payloadBytes.dropFirst(AesGcmCipher.nonceLength).dropLast(AesGcmCipher.tagLength)
-
         // CRITICAL: not a KDF -- see NaiveKey.swift. Zero-pad/truncate
         // transform of the raw license key string, exactly as the server
         // derives its own AES key for this format.
         let key = NaiveKey.derive(licenseKey: licenseKey)
-
-        do {
-            return try AesGcmCipher.open(key: key, nonce: nonce, ciphertext: ciphertext, tag: tag)
-        } catch {
-            throw TamgaCheckoutError.signatureVerificationFailed
-        }
+        return try EncryptedPayloadDecryptor.decrypt(payloadBytes, key: key, context: "Encrypted license file")
     }
 }

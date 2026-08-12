@@ -17,7 +17,7 @@ from here: [`tamga-api/docs/sdk.md`](https://github.com/tamga-sh/tamga-api/blob/
 **Current state: crypto/checkout/proof are real; HTTP client surface is still stub.**
 `Sources/Tamga/Crypto/` (Ed25519, AES-256-GCM, HKDF-SHA256, ECDSA-P256, RSA PKCS1/PSS, the naive
 license-key derivation), `Checkout/` (`LicenseFile`, `MachineFile`), and `Proof.swift`
-(`MachineProof` + `CanonicalJson`) are implemented and tested (90+ tests, 96%+ line coverage). The
+(`MachineProof` + `CanonicalJson`) are implemented and tested (115+ tests, 97%+ line coverage). The
 HTTP-facing surface (`TamgaClient`'s endpoint methods, `Transport.swift`, the full JSON:API error
 model, entitlement caching, heartbeat scheduling, the full `Policy` struct) is still stub — see each
 of those files' own doc comments for what's deferred and to which plan section. Do not assume any

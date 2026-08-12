@@ -40,7 +40,7 @@ import Foundation
 /// the caller's own `dataset` object contains too. `buildSignedPayload`
 /// implements this via `CanonicalJson`, a canonical (alphabetical, recursive)
 /// JSON writer, rather than a fixed-property-order type.
-public struct MachineProof {
+public struct MachineProof: Sendable {
     /// The only version prefix this SDK recognizes.
     public static let versionPrefix = "v1x0."
 
