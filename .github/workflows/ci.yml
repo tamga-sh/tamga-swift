@@ -144,6 +144,34 @@ jobs:
         run: |
           python3 Scripts/ci-use-local-xcframework.py "build/TamgaCore.xcframework"
 
+      - name: Find an available iOS Simulator destination
+        id: sim
+        run: |
+          set -eu
+          # A hardcoded device name (e.g. "iPhone 16") is brittle -- which
+          # simulator runtimes/devices are pre-installed varies by runner
+          # image and Xcode version, confirmed directly: this exact
+          # combination (macos-15 + Xcode 16.1 selected via
+          # maxim-lobanov/setup-xcode) had NO concrete iOS Simulator device
+          # available, only the "Any iOS Simulator Device" placeholder --
+          # querying simctl for whatever's actually installed and picking
+          # the first available iPhone is more robust than guessing a name.
+          NAME=$(xcrun simctl list devices available --json \
+            | python3 -c "
+import json, sys
+data = json.load(sys.stdin)
+for runtime, devices in data['devices'].items():
+    if 'iOS' not in runtime:
+        continue
+    for d in devices:
+        if d['isAvailable'] and 'iPhone' in d['name']:
+            print(d['name'])
+            sys.exit(0)
+sys.exit(1)
+")
+          echo "Using simulator: $NAME"
+          echo "name=$NAME" >> "$GITHUB_OUTPUT"
+
       - name: Test on iOS Simulator
         run: |
           # -scheme Tamga (the bare library target) is not configured for
@@ -155,5 +183,5 @@ jobs:
           # resolution above -- this was always unreachable before.
           xcodebuild test \
             -scheme Tamga-Package \
-            -destination 'platform=iOS Simulator,name=iPhone 16' \
+            -destination "platform=iOS Simulator,name=${{ steps.sim.outputs.name }}" \
             -skipMacroValidation
