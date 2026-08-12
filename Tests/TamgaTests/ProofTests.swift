@@ -5,6 +5,15 @@ import Testing
 
 @Suite("MachineProof")
 struct ProofTests {
+    /// Signs `payload` with `privateKey` and wraps it in a `"v1x0."`-prefixed
+    /// `MachineProof`, matching what `parse` expects from a real
+    /// `meta.proof` string.
+    private static func signedProof(payload: String, privateKey: SecKey) throws -> MachineProof {
+        let algorithm = SecKeyAlgorithm.rsaSignatureMessagePKCS1v15SHA256
+        let signature = RsaTestKey.sign(Data(payload.utf8), with: privateKey, algorithm: algorithm)
+        return try MachineProof.parse("v1x0." + signature.base64EncodedString())
+    }
+
     @Test("parse splits the v1x0. prefix from the signature")
     func parseSplitsVersionPrefix() throws {
         let proof = try MachineProof.parse("v1x0.dGVzdC1zaWduYXR1cmU=")
@@ -31,46 +40,68 @@ struct ProofTests {
             accountId: "acc-1", machineId: "mach-1", fingerprint: "fp-1",
             dataset: .object(["seat_count": .int(5)])
         )
-        #expect(payload == #"{"account":{"id":"acc-1"},"dataset":{"seat_count":5},"machine":{"fingerprint":"fp-1","id":"mach-1"}}"#)
+        let expected = #"""
+        {"account":{"id":"acc-1"},"dataset":{"seat_count":5},"machine":{"fingerprint":"fp-1","id":"mach-1"}}
+        """#
+        #expect(payload == expected)
     }
 
     @Test("verify returns true for a valid signature over the canonical payload")
-    func verifyReturnsTrueForValidSignature() {
+    func verifyReturnsTrueForValidSignature() throws {
         let pair = RsaTestKey.generate()
-        let payload = MachineProof.buildSignedPayload(accountId: "acc-1", machineId: "mach-1", fingerprint: "fp-1", dataset: .object([:]))
-        let signatureBytes = RsaTestKey.sign(Data(payload.utf8), with: pair.privateKey, algorithm: .rsaSignatureMessagePKCS1v15SHA256)
-        let proof = try! MachineProof.parse("v1x0." + signatureBytes.base64EncodedString())
+        let payload = MachineProof.buildSignedPayload(
+            accountId: "acc-1", machineId: "mach-1", fingerprint: "fp-1", dataset: .object([:])
+        )
+        let proof = try Self.signedProof(payload: payload, privateKey: pair.privateKey)
 
-        #expect(proof.verify(publicKeyDER: pair.publicKeySPKI, accountId: "acc-1", machineId: "mach-1", fingerprint: "fp-1", dataset: .object([:])))
+        let verified = proof.verify(
+            publicKeyDER: pair.publicKeySPKI, accountId: "acc-1", machineId: "mach-1",
+            fingerprint: "fp-1", dataset: .object([:])
+        )
+        #expect(verified)
     }
 
     @Test("verify returns false when the dataset was altered after signing")
-    func verifyReturnsFalseForAlteredDataset() {
+    func verifyReturnsFalseForAlteredDataset() throws {
         let pair = RsaTestKey.generate()
-        let signedPayload = MachineProof.buildSignedPayload(accountId: "acc-1", machineId: "mach-1", fingerprint: "fp-1", dataset: .object(["seats": .int(5)]))
-        let signatureBytes = RsaTestKey.sign(Data(signedPayload.utf8), with: pair.privateKey, algorithm: .rsaSignatureMessagePKCS1v15SHA256)
-        let proof = try! MachineProof.parse("v1x0." + signatureBytes.base64EncodedString())
+        let signedPayload = MachineProof.buildSignedPayload(
+            accountId: "acc-1", machineId: "mach-1", fingerprint: "fp-1", dataset: .object(["seats": .int(5)])
+        )
+        let proof = try Self.signedProof(payload: signedPayload, privateKey: pair.privateKey)
 
         // Verify against a DIFFERENT dataset than what was actually signed.
-        #expect(!proof.verify(publicKeyDER: pair.publicKeySPKI, accountId: "acc-1", machineId: "mach-1", fingerprint: "fp-1", dataset: .object(["seats": .int(99)])))
+        let verified = proof.verify(
+            publicKeyDER: pair.publicKeySPKI, accountId: "acc-1", machineId: "mach-1",
+            fingerprint: "fp-1", dataset: .object(["seats": .int(99)])
+        )
+        #expect(!verified)
     }
 
     @Test("verify returns false for a mismatched key")
-    func verifyReturnsFalseForMismatchedKey() {
+    func verifyReturnsFalseForMismatchedKey() throws {
         let signingPair = RsaTestKey.generate()
         let otherPair = RsaTestKey.generate()
-        let payload = MachineProof.buildSignedPayload(accountId: "acc-1", machineId: "mach-1", fingerprint: "fp-1", dataset: .object([:]))
-        let signatureBytes = RsaTestKey.sign(Data(payload.utf8), with: signingPair.privateKey, algorithm: .rsaSignatureMessagePKCS1v15SHA256)
-        let proof = try! MachineProof.parse("v1x0." + signatureBytes.base64EncodedString())
+        let payload = MachineProof.buildSignedPayload(
+            accountId: "acc-1", machineId: "mach-1", fingerprint: "fp-1", dataset: .object([:])
+        )
+        let proof = try Self.signedProof(payload: payload, privateKey: signingPair.privateKey)
 
-        #expect(!proof.verify(publicKeyDER: otherPair.publicKeySPKI, accountId: "acc-1", machineId: "mach-1", fingerprint: "fp-1", dataset: .object([:])))
+        let verified = proof.verify(
+            publicKeyDER: otherPair.publicKeySPKI, accountId: "acc-1", machineId: "mach-1",
+            fingerprint: "fp-1", dataset: .object([:])
+        )
+        #expect(!verified)
     }
 
     @Test("verify returns false, not a crash, for a malformed base64 signature")
-    func verifyReturnsFalseForMalformedSignature() {
+    func verifyReturnsFalseForMalformedSignature() throws {
         let pair = RsaTestKey.generate()
-        let proof = try! MachineProof.parse("v1x0.not-valid-base64!!!")
+        let proof = try MachineProof.parse("v1x0.not-valid-base64!!!")
 
-        #expect(!proof.verify(publicKeyDER: pair.publicKeySPKI, accountId: "acc-1", machineId: "mach-1", fingerprint: "fp-1", dataset: .object([:])))
+        let verified = proof.verify(
+            publicKeyDER: pair.publicKeySPKI, accountId: "acc-1", machineId: "mach-1",
+            fingerprint: "fp-1", dataset: .object([:])
+        )
+        #expect(!verified)
     }
 }

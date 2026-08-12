@@ -46,16 +46,8 @@ public struct Machine: Equatable, Sendable {
     /// Arbitrary caller-supplied metadata attached to the machine.
     public let metadata: [String: JSONValue]?
 
-    init(id: String, fingerprint: String?, name: String?, platform: String?, heartbeatStatus: HeartbeatStatus, lastHeartbeatAt: Date?, lastCheckOutAt: Date?, metadata: [String: JSONValue]?) {
-        self.id = id
-        self.fingerprint = fingerprint
-        self.name = name
-        self.platform = platform
-        self.heartbeatStatus = heartbeatStatus
-        self.lastHeartbeatAt = lastHeartbeatAt
-        self.lastCheckOutAt = lastCheckOutAt
-        self.metadata = metadata
-    }
+    // No explicit init: Swift synthesizes an equivalent memberwise one
+    // automatically (internal visibility, matching the properties above).
 
     /// Flattens a raw JSON:API machine resource into a `Machine`. Shared by
     /// `TamgaClient`'s (future) response mapping and `Checkout.MachineFile`'s

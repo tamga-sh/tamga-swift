@@ -105,7 +105,10 @@ public struct MachineFile {
 
         switch scheme {
         case .rsa2048JwtRs256:
-            throw TamgaCheckoutError.schemeNotSupported("RSA_2048_JWT_RS256 is rejected server-side for machine files (422 SCHEME_NOT_SUPPORTED) and is not implemented client-side either -- this SDK never attempts JWT/RS256 verification.")
+            throw TamgaCheckoutError.schemeNotSupported(
+                "RSA_2048_JWT_RS256 is rejected server-side for machine files (422 SCHEME_NOT_SUPPORTED) " +
+                "and is not implemented client-side either -- this SDK never attempts JWT/RS256 verification."
+            )
         case .none, .ed25519Sign:
             return Ed25519.verify(publicKey: publicKey, message: message, signature: signature)
         case .rsa2048Pkcs1Sign:
@@ -129,7 +132,9 @@ public struct MachineFile {
     /// - Parameter fingerprint: the target machine's fingerprint -- HKDF
     ///   `info` for an encrypted file. Decryption fails closed (AES-GCM auth
     ///   failure) if this doesn't match the machine the file was issued for.
-    public func verifyAndDecrypt(scheme: LicenseScheme, publicKey: Data, licenseKey: String, fingerprint: String) throws -> Machine {
+    public func verifyAndDecrypt(
+        scheme: LicenseScheme, publicKey: Data, licenseKey: String, fingerprint: String
+    ) throws -> Machine {
         guard try verify(scheme: scheme, publicKey: publicKey) else {
             throw TamgaCheckoutError.signatureVerificationFailed
         }
@@ -160,7 +165,10 @@ public struct MachineFile {
     private static func decryptPayload(_ payloadBytes: Data, licenseKey: String, fingerprint: String) throws -> Data {
         let minLength = AesGcmCipher.nonceLength + AesGcmCipher.tagLength
         guard payloadBytes.count >= minLength else {
-            throw TamgaCheckoutError.offlineFileFormat("Encrypted machine file payload too short: expected at least \(minLength) bytes, got \(payloadBytes.count).")
+            throw TamgaCheckoutError.offlineFileFormat(
+                "Encrypted machine file payload too short: expected at least \(minLength) bytes, " +
+                "got \(payloadBytes.count)."
+            )
         }
 
         let nonce = payloadBytes.prefix(AesGcmCipher.nonceLength)

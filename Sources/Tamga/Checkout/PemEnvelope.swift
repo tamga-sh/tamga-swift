@@ -22,7 +22,9 @@ enum PemEnvelope {
         // bug as a HIGH finding already fixed in tamga-dotnet's equivalent
         // PemEnvelope.Strip during that repo's mandatory security review.
         guard trimmed.count >= beginMarker.count + endMarker.count else {
-            throw TamgaCheckoutError.offlineFileFormat("Body between '\(beginMarker)' and '\(endMarker)' is malformed or too short.")
+            throw TamgaCheckoutError.offlineFileFormat(
+                "Body between '\(beginMarker)' and '\(endMarker)' is malformed or too short."
+            )
         }
 
         let bodyStart = trimmed.index(trimmed.startIndex, offsetBy: beginMarker.count)

@@ -27,9 +27,11 @@ struct RsaTests {
     @Test("verifyPkcs1 returns false for a tampered message")
     func verifyPkcs1ReturnsFalseForTamperedMessage() {
         let pair = RsaTestKey.generate()
-        let signature = RsaTestKey.sign(Data("original".utf8), with: pair.privateKey, algorithm: .rsaSignatureMessagePKCS1v15SHA256)
+        let original = Data("original".utf8)
+        let signature = RsaTestKey.sign(original, with: pair.privateKey, algorithm: .rsaSignatureMessagePKCS1v15SHA256)
 
-        #expect(!Rsa.verifyPkcs1(publicKeyDER: pair.publicKeySPKI, message: Data("tampered".utf8), signature: signature))
+        let tampered = Data("tampered".utf8)
+        #expect(!Rsa.verifyPkcs1(publicKeyDER: pair.publicKeySPKI, message: tampered, signature: signature))
     }
 
     @Test("verifyPkcs1 does not accept a PSS signature (padding schemes are not interchangeable)")
@@ -46,7 +48,8 @@ struct RsaTests {
         let signingPair = RsaTestKey.generate()
         let otherPair = RsaTestKey.generate()
         let message = Data("machine file payload".utf8)
-        let signature = RsaTestKey.sign(message, with: signingPair.privateKey, algorithm: .rsaSignatureMessagePKCS1v15SHA256)
+        let algorithm = SecKeyAlgorithm.rsaSignatureMessagePKCS1v15SHA256
+        let signature = RsaTestKey.sign(message, with: signingPair.privateKey, algorithm: algorithm)
 
         #expect(!Rsa.verifyPkcs1(publicKeyDER: otherPair.publicKeySPKI, message: message, signature: signature))
     }
@@ -54,6 +57,8 @@ struct RsaTests {
     @Test("verifyPkcs1 returns false, not a crash, for a malformed public key")
     func verifyPkcs1ReturnsFalseForMalformedKey() {
         let malformed = Data([0x01, 0x02, 0x03])
-        #expect(!Rsa.verifyPkcs1(publicKeyDER: malformed, message: Data("payload".utf8), signature: Data(repeating: 0, count: 256)))
+        let message = Data("payload".utf8)
+        let signature = Data(repeating: 0, count: 256)
+        #expect(!Rsa.verifyPkcs1(publicKeyDER: malformed, message: message, signature: signature))
     }
 }

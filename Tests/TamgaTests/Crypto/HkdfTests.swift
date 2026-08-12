@@ -13,23 +13,23 @@ struct HkdfTests {
 
     @Test("deriveMachineFileKey is deterministic for the same inputs")
     func deriveIsDeterministic() {
-        let a = Hkdf.deriveMachineFileKey(licenseKey: "TEST-LICENSE-KEY", fingerprint: "fp-1")
-        let b = Hkdf.deriveMachineFileKey(licenseKey: "TEST-LICENSE-KEY", fingerprint: "fp-1")
-        #expect(a == b)
+        let key1 = Hkdf.deriveMachineFileKey(licenseKey: "TEST-LICENSE-KEY", fingerprint: "fp-1")
+        let key2 = Hkdf.deriveMachineFileKey(licenseKey: "TEST-LICENSE-KEY", fingerprint: "fp-1")
+        #expect(key1 == key2)
     }
 
     @Test("deriveMachineFileKey differs when the fingerprint differs")
     func deriveDiffersByFingerprint() {
-        let a = Hkdf.deriveMachineFileKey(licenseKey: "TEST-LICENSE-KEY", fingerprint: "fp-1")
-        let b = Hkdf.deriveMachineFileKey(licenseKey: "TEST-LICENSE-KEY", fingerprint: "fp-2")
-        #expect(a != b)
+        let key1 = Hkdf.deriveMachineFileKey(licenseKey: "TEST-LICENSE-KEY", fingerprint: "fp-1")
+        let key2 = Hkdf.deriveMachineFileKey(licenseKey: "TEST-LICENSE-KEY", fingerprint: "fp-2")
+        #expect(key1 != key2)
     }
 
     @Test("deriveMachineFileKey differs when the license key differs")
     func deriveDiffersByLicenseKey() {
-        let a = Hkdf.deriveMachineFileKey(licenseKey: "LICENSE-A", fingerprint: "fp-1")
-        let b = Hkdf.deriveMachineFileKey(licenseKey: "LICENSE-B", fingerprint: "fp-1")
-        #expect(a != b)
+        let key1 = Hkdf.deriveMachineFileKey(licenseKey: "LICENSE-A", fingerprint: "fp-1")
+        let key2 = Hkdf.deriveMachineFileKey(licenseKey: "LICENSE-B", fingerprint: "fp-1")
+        #expect(key1 != key2)
     }
 
     @Test("deriveMachineFileKey differs from NaiveKey.derive for the same license key")

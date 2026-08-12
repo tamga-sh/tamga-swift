@@ -19,9 +19,12 @@ struct CanonicalJsonTests {
         let value = JSONValue.object([
             "machine": .object(["id": .string("m1"), "fingerprint": .string("fp1")]),
             "account": .object(["id": .string("a1")]),
-            "dataset": .object(["z": .int(1), "a": .int(2)]),
+            "dataset": .object(["z": .int(1), "a": .int(2)])
         ])
-        #expect(CanonicalJson.serialize(value) == #"{"account":{"id":"a1"},"dataset":{"a":2,"z":1},"machine":{"fingerprint":"fp1","id":"m1"}}"#)
+        let expected = #"""
+        {"account":{"id":"a1"},"dataset":{"a":2,"z":1},"machine":{"fingerprint":"fp1","id":"m1"}}
+        """#
+        #expect(CanonicalJson.serialize(value) == expected)
     }
 
     @Test("arrays keep their original element order")
@@ -44,7 +47,7 @@ struct CanonicalJsonTests {
         let value = JSONValue.object([
             "\u{10000}": .string("astral"), // 4-byte UTF-8
             "\u{E000}": .string("bmp-private-use"), // 3-byte UTF-8
-            "a": .string("ascii"), // 1-byte UTF-8
+            "a": .string("ascii") // 1-byte UTF-8
         ])
         let serialized = CanonicalJson.serialize(value)
 
@@ -53,9 +56,13 @@ struct CanonicalJsonTests {
         // (ascii key sorts first, then the 3-byte BMP key, then the 4-byte
         // astral key) without being brittle to how the non-ASCII key
         // characters themselves get rendered.
-        let asciiPos = serialized.range(of: "\"ascii\"")!.lowerBound
-        let bmpPos = serialized.range(of: "\"bmp-private-use\"")!.lowerBound
-        let astralPos = serialized.range(of: "\"astral\"")!.lowerBound
+        guard let asciiPos = serialized.range(of: "\"ascii\"")?.lowerBound,
+              let bmpPos = serialized.range(of: "\"bmp-private-use\"")?.lowerBound,
+              let astralPos = serialized.range(of: "\"astral\"")?.lowerBound
+        else {
+            Issue.record("expected all three key markers to be present in the serialized output")
+            return
+        }
         #expect(asciiPos < bmpPos)
         #expect(bmpPos < astralPos)
     }

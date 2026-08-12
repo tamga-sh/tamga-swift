@@ -59,7 +59,9 @@ public struct MachineProof {
     ///   if the prefix is present but the remaining signature is empty.
     public static func parse(_ proof: String) throws -> MachineProof {
         guard proof.hasPrefix(versionPrefix) else {
-            throw TamgaCheckoutError.unsupportedAlgorithm("Unrecognized offline proof format: expected the '\(versionPrefix)' prefix.")
+            throw TamgaCheckoutError.unsupportedAlgorithm(
+                "Unrecognized offline proof format: expected the '\(versionPrefix)' prefix."
+            )
         }
 
         let signature = String(proof.dropFirst(versionPrefix.count))
@@ -74,14 +76,16 @@ public struct MachineProof {
     /// recursively alphabetically key-sorted, matching `serde_json::json!()`'s
     /// `BTreeMap`-backed output. See type-level remarks for why this is NOT
     /// literal source order.
-    public static func buildSignedPayload(accountId: String, machineId: String, fingerprint: String, dataset: JSONValue) -> String {
+    public static func buildSignedPayload(
+        accountId: String, machineId: String, fingerprint: String, dataset: JSONValue
+    ) -> String {
         let payload = JSONValue.object([
             "account": .object(["id": .string(accountId)]),
             "machine": .object([
                 "id": .string(machineId),
-                "fingerprint": .string(fingerprint),
+                "fingerprint": .string(fingerprint)
             ]),
-            "dataset": dataset,
+            "dataset": dataset
         ])
         return CanonicalJson.serialize(payload)
     }
@@ -89,12 +93,16 @@ public struct MachineProof {
     /// Verifies this proof's RSA-2048 PKCS#1 v1.5/SHA-256 signature against
     /// the reconstructed canonical payload. Fails closed (returns `false`)
     /// on any mismatch, including a `dataset` that was altered post-signing.
-    public func verify(publicKeyDER: Data, accountId: String, machineId: String, fingerprint: String, dataset: JSONValue) -> Bool {
+    public func verify(
+        publicKeyDER: Data, accountId: String, machineId: String, fingerprint: String, dataset: JSONValue
+    ) -> Bool {
         guard let signature = Data(base64Encoded: rawSignatureBase64) else {
             return false
         }
 
-        let payload = Self.buildSignedPayload(accountId: accountId, machineId: machineId, fingerprint: fingerprint, dataset: dataset)
+        let payload = Self.buildSignedPayload(
+            accountId: accountId, machineId: machineId, fingerprint: fingerprint, dataset: dataset
+        )
         let message = Data(payload.utf8)
         return Rsa.verifyPkcs1(publicKeyDER: publicKeyDER, message: message, signature: signature)
     }

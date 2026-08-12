@@ -44,7 +44,9 @@ extension JSONDecoder.DateDecodingStrategy {
             return date
         }
 
-        throw DecodingError.dataCorruptedError(in: container, debugDescription: "Expected ISO 8601 date string, got '\(string)'")
+        throw DecodingError.dataCorruptedError(
+            in: container, debugDescription: "Expected ISO 8601 date string, got '\(string)'"
+        )
     }
 }
 

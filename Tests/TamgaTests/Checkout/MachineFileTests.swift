@@ -6,16 +6,13 @@ import Testing
 
 @Suite("MachineFile")
 struct MachineFileTests {
-    private static let begin = "-----BEGIN MACHINE FILE-----"
-    private static let end = "-----END MACHINE FILE-----"
-
     @Test("verify succeeds for a valid Ed25519-signed file")
     func verifySucceedsForEd25519() throws {
         let key = Curve25519.Signing.PrivateKey()
         let json = CheckoutFixture.machinePayloadJSON()
         let enc = CheckoutFixture.plainEnc(json: json)
         let sig = CheckoutFixture.ed25519Sign(enc: enc, privateKey: key)
-        let pem = CheckoutFixture.wrapInPEM(certificate: .init(enc: enc, sig: sig, alg: "base64+ed25519"), beginMarker: Self.begin, endMarker: Self.end)
+        let pem = CheckoutFixture.wrapMachinePEM(enc: enc, sig: sig, alg: "base64+ed25519")
 
         let file = try MachineFile.parse(pem)
         #expect(try file.verify(scheme: .ed25519Sign, publicKey: key.publicKey.rawRepresentation))
@@ -27,7 +24,7 @@ struct MachineFileTests {
         let json = CheckoutFixture.machinePayloadJSON()
         let enc = CheckoutFixture.plainEnc(json: json)
         let sig = CheckoutFixture.ecdsaSign(enc: enc, privateKey: key)
-        let pem = CheckoutFixture.wrapInPEM(certificate: .init(enc: enc, sig: sig, alg: "ecdsa-sha256"), beginMarker: Self.begin, endMarker: Self.end)
+        let pem = CheckoutFixture.wrapMachinePEM(enc: enc, sig: sig, alg: "ecdsa-sha256")
 
         let file = try MachineFile.parse(pem)
         #expect(try file.verify(scheme: .ecdsaP256Sign, publicKey: key.publicKey.derRepresentation))
@@ -38,8 +35,9 @@ struct MachineFileTests {
         let pair = RsaTestKey.generate()
         let json = CheckoutFixture.machinePayloadJSON()
         let enc = CheckoutFixture.plainEnc(json: json)
-        let sig = CheckoutFixture.rsaSign(enc: enc, privateKey: pair.privateKey, algorithm: .rsaSignatureMessagePKCS1v15SHA256)
-        let pem = CheckoutFixture.wrapInPEM(certificate: .init(enc: enc, sig: sig, alg: "rsa-sha256"), beginMarker: Self.begin, endMarker: Self.end)
+        let algorithm = SecKeyAlgorithm.rsaSignatureMessagePKCS1v15SHA256
+        let sig = CheckoutFixture.rsaSign(enc: enc, privateKey: pair.privateKey, algorithm: algorithm)
+        let pem = CheckoutFixture.wrapMachinePEM(enc: enc, sig: sig, alg: "rsa-sha256")
 
         let file = try MachineFile.parse(pem)
         #expect(try file.verify(scheme: .rsa2048Pkcs1Sign, publicKey: pair.publicKeySPKI))
@@ -50,8 +48,9 @@ struct MachineFileTests {
         let pair = RsaTestKey.generate()
         let json = CheckoutFixture.machinePayloadJSON()
         let enc = CheckoutFixture.plainEnc(json: json)
-        let sig = CheckoutFixture.rsaSign(enc: enc, privateKey: pair.privateKey, algorithm: .rsaSignatureMessagePSSSHA256)
-        let pem = CheckoutFixture.wrapInPEM(certificate: .init(enc: enc, sig: sig, alg: "rsa-pss-sha256"), beginMarker: Self.begin, endMarker: Self.end)
+        let algorithm = SecKeyAlgorithm.rsaSignatureMessagePSSSHA256
+        let sig = CheckoutFixture.rsaSign(enc: enc, privateKey: pair.privateKey, algorithm: algorithm)
+        let pem = CheckoutFixture.wrapMachinePEM(enc: enc, sig: sig, alg: "rsa-pss-sha256")
 
         let file = try MachineFile.parse(pem)
         #expect(try file.verify(scheme: .rsa2048Pkcs1PssSign, publicKey: pair.publicKeySPKI))
@@ -63,7 +62,7 @@ struct MachineFileTests {
         let json = CheckoutFixture.machinePayloadJSON()
         let enc = CheckoutFixture.plainEnc(json: json)
         let sig = CheckoutFixture.ed25519Sign(enc: enc, privateKey: key)
-        let pem = CheckoutFixture.wrapInPEM(certificate: .init(enc: enc, sig: sig, alg: "base64+ed25519"), beginMarker: Self.begin, endMarker: Self.end)
+        let pem = CheckoutFixture.wrapMachinePEM(enc: enc, sig: sig, alg: "base64+ed25519")
 
         let file = try MachineFile.parse(pem)
         #expect(try file.verify(scheme: .none, publicKey: key.publicKey.rawRepresentation))
@@ -80,11 +79,15 @@ struct MachineFileTests {
         // Even a validly-signed PKCS1 signature must not slip through under
         // the JWT scheme -- the scheme itself is rejected before any
         // signature check runs.
-        let sig = CheckoutFixture.rsaSign(enc: enc, privateKey: pair.privateKey, algorithm: .rsaSignatureMessagePKCS1v15SHA256)
-        let pem = CheckoutFixture.wrapInPEM(certificate: .init(enc: enc, sig: sig, alg: "rsa-sha256"), beginMarker: Self.begin, endMarker: Self.end)
+        let algorithm = SecKeyAlgorithm.rsaSignatureMessagePKCS1v15SHA256
+        let sig = CheckoutFixture.rsaSign(enc: enc, privateKey: pair.privateKey, algorithm: algorithm)
+        let pem = CheckoutFixture.wrapMachinePEM(enc: enc, sig: sig, alg: "rsa-sha256")
 
         let file = try MachineFile.parse(pem)
-        #expect(throws: TamgaCheckoutError.schemeNotSupported("RSA_2048_JWT_RS256 is rejected server-side for machine files (422 SCHEME_NOT_SUPPORTED) and is not implemented client-side either -- this SDK never attempts JWT/RS256 verification.")) {
+        let expectedMessage =
+            "RSA_2048_JWT_RS256 is rejected server-side for machine files (422 SCHEME_NOT_SUPPORTED) " +
+            "and is not implemented client-side either -- this SDK never attempts JWT/RS256 verification."
+        #expect(throws: TamgaCheckoutError.schemeNotSupported(expectedMessage)) {
             _ = try file.verify(scheme: .rsa2048JwtRs256, publicKey: pair.publicKeySPKI)
         }
     }
@@ -98,10 +101,13 @@ struct MachineFileTests {
         let json = CheckoutFixture.machinePayloadJSON(fingerprint: fingerprint)
         let enc = CheckoutFixture.encryptedEnc(json: json, key: aesKey)
         let sig = CheckoutFixture.ed25519Sign(enc: enc, privateKey: signingKey)
-        let pem = CheckoutFixture.wrapInPEM(certificate: .init(enc: enc, sig: sig, alg: "aes-256-gcm+ed25519"), beginMarker: Self.begin, endMarker: Self.end)
+        let pem = CheckoutFixture.wrapMachinePEM(enc: enc, sig: sig, alg: "aes-256-gcm+ed25519")
 
         let file = try MachineFile.parse(pem)
-        let machine = try file.verifyAndDecrypt(scheme: .ed25519Sign, publicKey: signingKey.publicKey.rawRepresentation, licenseKey: licenseKey, fingerprint: fingerprint)
+        let machine = try file.verifyAndDecrypt(
+            scheme: .ed25519Sign, publicKey: signingKey.publicKey.rawRepresentation,
+            licenseKey: licenseKey, fingerprint: fingerprint
+        )
 
         #expect(machine.id == "mach_123")
         #expect(machine.fingerprint == fingerprint)
@@ -119,11 +125,14 @@ struct MachineFileTests {
         let json = CheckoutFixture.machinePayloadJSON(fingerprint: realFingerprint)
         let enc = CheckoutFixture.encryptedEnc(json: json, key: aesKey)
         let sig = CheckoutFixture.ed25519Sign(enc: enc, privateKey: signingKey)
-        let pem = CheckoutFixture.wrapInPEM(certificate: .init(enc: enc, sig: sig, alg: "aes-256-gcm+ed25519"), beginMarker: Self.begin, endMarker: Self.end)
+        let pem = CheckoutFixture.wrapMachinePEM(enc: enc, sig: sig, alg: "aes-256-gcm+ed25519")
 
         let file = try MachineFile.parse(pem)
         #expect(throws: TamgaCheckoutError.signatureVerificationFailed) {
-            _ = try file.verifyAndDecrypt(scheme: .ed25519Sign, publicKey: signingKey.publicKey.rawRepresentation, licenseKey: licenseKey, fingerprint: "wrong-fingerprint")
+            _ = try file.verifyAndDecrypt(
+                scheme: .ed25519Sign, publicKey: signingKey.publicKey.rawRepresentation,
+                licenseKey: licenseKey, fingerprint: "wrong-fingerprint"
+            )
         }
     }
 

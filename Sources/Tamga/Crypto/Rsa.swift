@@ -20,19 +20,21 @@ enum Rsa {
     private static func importPublicKey(fromSubjectPublicKeyInfo der: Data) -> SecKey? {
         let attributes: [CFString: Any] = [
             kSecAttrKeyType: kSecAttrKeyTypeRSA,
-            kSecAttrKeyClass: kSecAttrKeyClassPublic,
+            kSecAttrKeyClass: kSecAttrKeyClassPublic
         ]
         return SecKeyCreateWithData(der as CFData, attributes as CFDictionary, nil)
     }
 
     /// Verifies an RSA-PKCS#1 v1.5/SHA-256 signature.
     static func verifyPkcs1(publicKeyDER: Data, message: Data, signature: Data) -> Bool {
-        verify(publicKeyDER: publicKeyDER, message: message, signature: signature, algorithm: .rsaSignatureMessagePKCS1v15SHA256)
+        verify(publicKeyDER: publicKeyDER, message: message, signature: signature,
+               algorithm: .rsaSignatureMessagePKCS1v15SHA256)
     }
 
     /// Verifies an RSA-PSS/SHA-256 signature.
     static func verifyPss(publicKeyDER: Data, message: Data, signature: Data) -> Bool {
-        verify(publicKeyDER: publicKeyDER, message: message, signature: signature, algorithm: .rsaSignatureMessagePSSSHA256)
+        verify(publicKeyDER: publicKeyDER, message: message, signature: signature,
+               algorithm: .rsaSignatureMessagePSSSHA256)
     }
 
     private static func verify(publicKeyDER: Data, message: Data, signature: Data, algorithm: SecKeyAlgorithm) -> Bool {

@@ -78,9 +78,11 @@ enum DER {
     static func ecNamedCurveOID(fromSubjectPublicKeyInfo der: some Sequence<UInt8>) -> [UInt8]? {
         let bytes = Array(der)[...]
         guard let (outer, _) = try? readElement(bytes), outer.tag == sequenceTag,
-              let (algorithmIdentifier, _) = try? readElement(outer.content), algorithmIdentifier.tag == sequenceTag,
-              let (algorithmOID, algIdRest) = try? readElement(algorithmIdentifier.content), algorithmOID.tag == objectIdentifierTag,
-              let (curveOID, _) = try? readElement(algIdRest), curveOID.tag == objectIdentifierTag
+              let (algId, _) = try? readElement(outer.content), algId.tag == sequenceTag,
+              let (algorithmOID, algIdRest) = try? readElement(algId.content),
+              algorithmOID.tag == objectIdentifierTag,
+              let (curveOID, _) = try? readElement(algIdRest),
+              curveOID.tag == objectIdentifierTag
         else {
             return nil
         }

@@ -33,38 +33,50 @@ enum CanonicalJson {
         case .string(let value):
             writeEscapedString(value, into: &output)
         case .array(let elements):
-            output += "["
-            for (index, element) in elements.enumerated() {
-                if index > 0 { output += "," }
-                write(element, into: &output)
-            }
-            output += "]"
+            writeArray(elements, into: &output)
         case .object(let fields):
-            output += "{"
-            // Sort by UTF-8 byte order explicitly, not Swift's default
-            // String comparison. This SDK family's own audit found a live,
-            // demonstrable divergence in tamga-js's canonicalJson.ts (its
-            // default UTF-16-code-unit comparison disagreed with Rust's
-            // BTreeMap<String,_> byte-wise order for astral-plane
-            // characters). Checked directly whether Swift's default String
-            // comparison (Unicode-canonical-equivalence-aware, not raw code
-            // units) has the same failure mode: several adversarial pairs
-            // (BMP-private-use vs astral, precomposed vs decomposed
-            // combining forms) did NOT diverge from UTF-8 byte order in
-            // that check. Sorting by .utf8 explicitly is kept anyway --
-            // matching Rust's BTreeMap<String, _> ordering (defined as
-            // UTF-8 byte-lexicographic) is the actual requirement here, not
-            // an incidental property of whatever Swift's default comparator
-            // happens to do for the pairs tested so far.
-            let sortedKeys = fields.keys.sorted { $0.utf8.lexicographicallyPrecedes($1.utf8) }
-            for (index, key) in sortedKeys.enumerated() {
-                if index > 0 { output += "," }
-                writeEscapedString(key, into: &output)
-                output += ":"
-                write(fields[key]!, into: &output)
-            }
-            output += "}"
+            writeObject(fields, into: &output)
         }
+    }
+
+    private static func writeArray(_ elements: [JSONValue], into output: inout String) {
+        output += "["
+        for (index, element) in elements.enumerated() {
+            if index > 0 { output += "," }
+            write(element, into: &output)
+        }
+        output += "]"
+    }
+
+    private static func writeObject(_ fields: [String: JSONValue], into output: inout String) {
+        output += "{"
+        // Sort by UTF-8 byte order explicitly, not Swift's default String
+        // comparison. This SDK family's own audit found a live,
+        // demonstrable divergence in tamga-js's canonicalJson.ts (its
+        // default UTF-16-code-unit comparison disagreed with Rust's
+        // BTreeMap<String,_> byte-wise order for astral-plane characters).
+        // Checked directly whether Swift's default String comparison
+        // (Unicode-canonical-equivalence-aware, not raw code units) has the
+        // same failure mode: several adversarial pairs (BMP-private-use vs
+        // astral, precomposed vs decomposed combining forms) did NOT
+        // diverge from UTF-8 byte order in that check. Sorting by .utf8
+        // explicitly is kept anyway -- matching Rust's BTreeMap<String, _>
+        // ordering (defined as UTF-8 byte-lexicographic) is the actual
+        // requirement here, not an incidental property of whatever Swift's
+        // default comparator happens to do for the pairs tested so far.
+        let sortedKeys = fields.keys.sorted { $0.utf8.lexicographicallyPrecedes($1.utf8) }
+        for (index, key) in sortedKeys.enumerated() {
+            if index > 0 { output += "," }
+            writeEscapedString(key, into: &output)
+            output += ":"
+            // fields[key] can't actually be nil (key came from fields.keys),
+            // but an `if let` here avoids a force-unwrap for a lookup the
+            // compiler can't itself prove is total.
+            if let fieldValue = fields[key] {
+                write(fieldValue, into: &output)
+            }
+        }
+        output += "}"
     }
 
     /// JSON string escaping matching serde_json's default: `"` and `\` are

@@ -29,16 +29,8 @@ public struct License: Equatable, Sendable {
     /// Arbitrary key/value metadata attached to the license.
     public let metadata: [String: JSONValue]?
 
-    init(id: String, key: String?, suspended: Bool, expiry: Date?, uses: Int, lastValidatedAt: Date?, lastCheckInAt: Date?, metadata: [String: JSONValue]?) {
-        self.id = id
-        self.key = key
-        self.suspended = suspended
-        self.expiry = expiry
-        self.uses = uses
-        self.lastValidatedAt = lastValidatedAt
-        self.lastCheckInAt = lastCheckInAt
-        self.metadata = metadata
-    }
+    // No explicit init: Swift synthesizes an equivalent memberwise one
+    // automatically (internal visibility, matching the properties above).
 
     /// Flattens a raw JSON:API license resource into a `License`. Shared by
     /// `TamgaClient`'s (future) response mapping and `Checkout.LicenseFile`'s

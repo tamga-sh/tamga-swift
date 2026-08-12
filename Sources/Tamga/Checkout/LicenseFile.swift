@@ -80,7 +80,10 @@ public struct LicenseFile {
     ///   contain `"ed25519"`.
     public func verify(publicKey: Data) throws -> Bool {
         guard certificate.alg.contains("ed25519") else {
-            throw TamgaCheckoutError.unsupportedAlgorithm("Unsupported license file algorithm: '\(certificate.alg)'. Only ed25519-signed license files are supported.")
+            throw TamgaCheckoutError.unsupportedAlgorithm(
+                "Unsupported license file algorithm: '\(certificate.alg)'. " +
+                "Only ed25519-signed license files are supported."
+            )
         }
 
         guard let signature = Data(base64Encoded: certificate.sig) else {
@@ -135,7 +138,10 @@ public struct LicenseFile {
     private static func decryptPayload(_ payloadBytes: Data, licenseKey: String) throws -> Data {
         let minLength = AesGcmCipher.nonceLength + AesGcmCipher.tagLength
         guard payloadBytes.count >= minLength else {
-            throw TamgaCheckoutError.offlineFileFormat("Encrypted license file payload too short: expected at least \(minLength) bytes, got \(payloadBytes.count).")
+            throw TamgaCheckoutError.offlineFileFormat(
+                "Encrypted license file payload too short: expected at least \(minLength) bytes, " +
+                "got \(payloadBytes.count)."
+            )
         }
 
         let nonce = payloadBytes.prefix(AesGcmCipher.nonceLength)

@@ -29,7 +29,9 @@ enum CheckoutFixture {
     /// base64 of `nonce || ciphertext || tag`.
     static func encryptedEnc(json: Data, key: Data) -> String {
         let nonce = Data((0..<AesGcmCipher.nonceLength).map { _ in UInt8.random(in: .min ... .max) })
-        let (ciphertext, tag) = try! AesGcmCipher.seal(key: key, nonce: nonce, plaintext: json)
+        guard let (ciphertext, tag) = try? AesGcmCipher.seal(key: key, nonce: nonce, plaintext: json) else {
+            fatalError("CheckoutFixture.encryptedEnc: AES-GCM seal unexpectedly failed")
+        }
         var combined = nonce
         combined.append(ciphertext)
         combined.append(tag)
@@ -40,13 +42,17 @@ enum CheckoutFixture {
     /// key, matching the real wire contract.
     static func ed25519Sign(enc: String, privateKey: Curve25519.Signing.PrivateKey) -> String {
         let message = Data(enc.utf8)
-        let signature = try! privateKey.signature(for: message)
+        guard let signature = try? privateKey.signature(for: message) else {
+            fatalError("CheckoutFixture.ed25519Sign: signing unexpectedly failed")
+        }
         return signature.base64EncodedString()
     }
 
     static func ecdsaSign(enc: String, privateKey: P256.Signing.PrivateKey) -> String {
         let message = Data(enc.utf8)
-        let signature = try! privateKey.signature(for: message)
+        guard let signature = try? privateKey.signature(for: message) else {
+            fatalError("CheckoutFixture.ecdsaSign: signing unexpectedly failed")
+        }
         return signature.rawRepresentation.base64EncodedString()
     }
 
@@ -56,9 +62,29 @@ enum CheckoutFixture {
     }
 
     static func wrapInPEM(certificate: Certificate, beginMarker: String, endMarker: String) -> String {
-        let json = try! JSONEncoder().encode(certificate)
+        guard let json = try? JSONEncoder().encode(certificate) else {
+            fatalError("CheckoutFixture.wrapInPEM: certificate encoding unexpectedly failed")
+        }
         let body = json.base64EncodedString()
         return "\(beginMarker)\n\(body)\n\(endMarker)"
+    }
+
+    /// `wrapInPEM` pre-bound to `.lic` file markers, for `LicenseFileTests`'
+    /// many call sites.
+    static func wrapLicensePEM(enc: String, sig: String, alg: String) -> String {
+        wrapInPEM(
+            certificate: .init(enc: enc, sig: sig, alg: alg),
+            beginMarker: "-----BEGIN LICENSE FILE-----", endMarker: "-----END LICENSE FILE-----"
+        )
+    }
+
+    /// `wrapInPEM` pre-bound to `.machine` file markers, for
+    /// `MachineFileTests`' many call sites.
+    static func wrapMachinePEM(enc: String, sig: String, alg: String) -> String {
+        wrapInPEM(
+            certificate: .init(enc: enc, sig: sig, alg: alg),
+            beginMarker: "-----BEGIN MACHINE FILE-----", endMarker: "-----END MACHINE FILE-----"
+        )
     }
 
     /// A minimal, valid `{"data": {...}}` license-resource JSON payload.
@@ -89,7 +115,9 @@ enum CheckoutFixture {
     /// A minimal, valid `{"data": {...}}` machine-resource JSON payload.
     static func machinePayloadJSON(fingerprint: String = "fp-abc123") -> Data {
         let json = """
-        {"data":{"id":"mach_123","type":"machines","attributes":{"fingerprint":"\(fingerprint)","heartbeat_status":"NOT_STARTED"}}}
+        {"data":{"id":"mach_123","type":"machines","attributes":{
+          "fingerprint":"\(fingerprint)","heartbeat_status":"NOT_STARTED"
+        }}}
         """
         return Data(json.utf8)
     }

@@ -19,16 +19,16 @@ enum RsaTestKey {
     static func generate() -> Pair {
         let attributes: [CFString: Any] = [
             kSecAttrKeyType: kSecAttrKeyTypeRSA,
-            kSecAttrKeySizeInBits: 2048,
+            kSecAttrKeySizeInBits: 2048
         ]
         var error: Unmanaged<CFError>?
         guard let privateKey = SecKeyCreateRandomKey(attributes as CFDictionary, &error) else {
-            fatalError("RSA test key generation failed: \(error!.takeRetainedValue())")
+            fatalError("RSA test key generation failed: \(describe(error))")
         }
         guard let publicKey = SecKeyCopyPublicKey(privateKey),
               let pkcs1 = SecKeyCopyExternalRepresentation(publicKey, &error) as Data?
         else {
-            fatalError("RSA public key export failed: \(error?.takeRetainedValue() as Error? ?? CocoaError(.coderInvalidValue))")
+            fatalError("RSA public key export failed: \(describe(error))")
         }
         return Pair(privateKey: privateKey, publicKeySPKI: wrapInSubjectPublicKeyInfo(pkcs1RSAPublicKey: pkcs1))
     }
@@ -39,9 +39,16 @@ enum RsaTestKey {
     static func sign(_ message: Data, with privateKey: SecKey, algorithm: SecKeyAlgorithm) -> Data {
         var error: Unmanaged<CFError>?
         guard let signature = SecKeyCreateSignature(privateKey, algorithm, message as CFData, &error) as Data? else {
-            fatalError("RSA test signing failed: \(error!.takeRetainedValue())")
+            fatalError("RSA test signing failed: \(describe(error))")
         }
         return signature
+    }
+
+    /// Renders a `SecKey` API's `Unmanaged<CFError>?` out-parameter for a
+    /// `fatalError` message without a force-unwrap.
+    private static func describe(_ error: Unmanaged<CFError>?) -> String {
+        guard let error else { return "unknown error" }
+        return String(describing: error.takeRetainedValue())
     }
 
     /// Wraps a bare PKCS#1 `RSAPublicKey` DER structure (what

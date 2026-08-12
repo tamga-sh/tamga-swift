@@ -31,7 +31,8 @@ struct DERTests {
     func returnsNilForMalformedInput() {
         #expect(DER.ecNamedCurveOID(fromSubjectPublicKeyInfo: [UInt8]()) == nil)
         #expect(DER.ecNamedCurveOID(fromSubjectPublicKeyInfo: [0x30]) == nil) // truncated: tag with no length
-        #expect(DER.ecNamedCurveOID(fromSubjectPublicKeyInfo: [0x30, 0xFF]) == nil) // length says 255 bytes follow, none do
+        // length byte says 255 content bytes follow; none do
+        #expect(DER.ecNamedCurveOID(fromSubjectPublicKeyInfo: [0x30, 0xFF]) == nil)
         #expect(DER.ecNamedCurveOID(fromSubjectPublicKeyInfo: Array(repeating: UInt8(0), count: 10)) == nil)
     }
 

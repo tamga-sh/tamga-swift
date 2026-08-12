@@ -12,7 +12,8 @@ struct EcdsaTests {
         let message = Data("machine file payload".utf8)
         let signature = try key.signature(for: message)
 
-        #expect(Ecdsa.verify(publicKeyDER: key.publicKey.derRepresentation, message: message, signature: signature.rawRepresentation))
+        let derKey = key.publicKey.derRepresentation
+        #expect(Ecdsa.verify(publicKeyDER: derKey, message: message, signature: signature.rawRepresentation))
     }
 
     @Test("verify returns false for a tampered message")
@@ -20,7 +21,9 @@ struct EcdsaTests {
         let key = P256.Signing.PrivateKey()
         let signature = try key.signature(for: Data("original".utf8))
 
-        #expect(!Ecdsa.verify(publicKeyDER: key.publicKey.derRepresentation, message: Data("tampered".utf8), signature: signature.rawRepresentation))
+        let derKey = key.publicKey.derRepresentation
+        let tampered = Data("tampered".utf8)
+        #expect(!Ecdsa.verify(publicKeyDER: derKey, message: tampered, signature: signature.rawRepresentation))
     }
 
     @Test("verify returns false for a genuinely different curve's key and signature (P-384)")
@@ -34,7 +37,8 @@ struct EcdsaTests {
         let message = Data("tamga-swift ecdsa curve-confusion regression test".utf8)
         let signature = try key.signature(for: message)
 
-        #expect(!Ecdsa.verify(publicKeyDER: key.publicKey.derRepresentation, message: message, signature: signature.rawRepresentation))
+        let derKey = key.publicKey.derRepresentation
+        #expect(!Ecdsa.verify(publicKeyDER: derKey, message: message, signature: signature.rawRepresentation))
     }
 
     /// Regression test for the curve-confusion bug class this SDK family's
@@ -53,11 +57,11 @@ struct EcdsaTests {
     /// `Ecdsa.verify`'s explicit OID check (see `Ecdsa.swift` and
     /// `DER.swift`) is what actually closes this -- without it, this exact
     /// test would pass with a `true` result instead of `false`.
-    @Test("verify returns false for an SPKI whose declared curve OID isn't P-256, even when the coordinate length matches")
+    @Test("verify returns false for a mismatched curve OID, even when the coordinate length matches P-256's")
     func verifyReturnsFalseForMismatchedCurveOIDWithMatchingCoordinateLength() throws {
         let key = P256.Signing.PrivateKey()
         let message = Data("tamga-swift ecdsa curve-confusion regression test".utf8)
-        let signature = try key.signature(for: message)
+        let rawSignature = try key.signature(for: message).rawRepresentation
 
         let point = key.publicKey.x963Representation // 65 bytes: 0x04 || X(32) || Y(32)
         #expect(point.count == 65)
@@ -78,20 +82,22 @@ struct EcdsaTests {
         mislabeledSPKI.append(contentsOf: algorithmIdentifier)
         mislabeledSPKI.append(contentsOf: bitString)
 
-        #expect(!Ecdsa.verify(publicKeyDER: Data(mislabeledSPKI), message: message, signature: signature.rawRepresentation))
+        #expect(!Ecdsa.verify(publicKeyDER: Data(mislabeledSPKI), message: message, signature: rawSignature))
     }
 
     @Test("verify returns false, not a crash, for a malformed public key")
     func verifyReturnsFalseForMalformedKey() {
         let malformed = Data([0x01, 0x02, 0x03])
-        #expect(!Ecdsa.verify(publicKeyDER: malformed, message: Data("payload".utf8), signature: Data(repeating: 0, count: 64)))
+        let signature = Data(repeating: 0, count: 64)
+        #expect(!Ecdsa.verify(publicKeyDER: malformed, message: Data("payload".utf8), signature: signature))
     }
 
     @Test("verify returns false, not a crash, for a wrong-length signature")
     func verifyReturnsFalseForWrongLengthSignature() {
         let key = P256.Signing.PrivateKey()
         let tooShort = Data([0x01, 0x02, 0x03]) // P-256 IEEE P1363 signatures are always 64 bytes
+        let derKey = key.publicKey.derRepresentation
 
-        #expect(!Ecdsa.verify(publicKeyDER: key.publicKey.derRepresentation, message: Data("payload".utf8), signature: tooShort))
+        #expect(!Ecdsa.verify(publicKeyDER: derKey, message: Data("payload".utf8), signature: tooShort))
     }
 }
