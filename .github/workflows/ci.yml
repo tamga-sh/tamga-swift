@@ -106,6 +106,21 @@ jobs:
         with:
           xcode-version: "16.1"
 
+      # Confirmed directly (see "Create an iOS Simulator device" below for
+      # the full account) that this runner/Xcode combination cannot be
+      # trusted to already have a usable iOS Simulator runtime: GitHub's
+      # own runner-images manifest documents Xcode 16.1 as paired with
+      # "Simulator - iOS 18.1", but that exact runtime was simply absent
+      # from `simctl list runtimes` on the specific ephemeral runner this
+      # job landed on -- only unrelated, newer runtime versions were
+      # present, mounted as shared CoreSimulator volumes Xcode 16.1 doesn't
+      # recognize as its own. `-downloadPlatform` is Apple's own supported
+      # mechanism for exactly this: it fetches and registers whichever
+      # platform the selected Xcode actually needs, regardless of what
+      # happened to be pre-cached on this particular runner instance.
+      - name: Ensure a matching iOS Simulator platform is installed
+        run: xcodebuild -downloadPlatform iOS
+
       # See the macOS job's identical step for the full rationale -- same
       # local-dev-override-automated-in-CI pattern, iOS Simulator slice
       # instead of macOS universal.
@@ -184,6 +199,12 @@ jobs:
           # Reading that pairing directly from xcodebuild rather than
           # hand-copying today's documented version keeps this correct if
           # the image's Xcode/SDK pairings change later.
+          #
+          # Even matching by exact version still isn't enough on its own,
+          # confirmed directly: on at least one ephemeral runner instance,
+          # no installed runtime matched "18.1" at all -- see the
+          # "Ensure a matching iOS Simulator platform is installed" step
+          # above, added for exactly that gap.
           SDK_VERSION=$(xcodebuild -showsdks -json | jq -r '[.[] | select(.platform == "iphonesimulator")][0].sdkVersion')
           echo "Xcode's paired iOS Simulator SDK version: $SDK_VERSION"
           RUNTIME_JSON=$(xcrun simctl list runtimes available --json | jq -c --arg v "$SDK_VERSION" '[.runtimes[] | select(.version == $v)][0]')
