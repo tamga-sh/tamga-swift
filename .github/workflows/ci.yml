@@ -167,7 +167,16 @@ jobs:
           # draft of this step (dedented Python lines inside `run: |`
           # terminated the block scalar early -- a real, confirmed parse
           # failure, not a hypothetical one).
-          DEST=$(xcodebuild -scheme Tamga-Package -showdestinations 2>&1 | python3 Scripts/find-ios-simulator.py)
+          #
+          # Always logged (not just on failure): piping xcodebuild straight
+          # into the parser hides its raw output from the CI log entirely
+          # (only the pipeline's final stdout would show), which turned a
+          # previous failure here into a guessing exercise. Printing it
+          # first makes any future destination-selection failure
+          # self-diagnosing from the CI log alone.
+          xcodebuild -scheme Tamga-Package -showdestinations > /tmp/showdestinations.log 2>&1 || true
+          cat /tmp/showdestinations.log
+          DEST=$(python3 Scripts/find-ios-simulator.py < /tmp/showdestinations.log)
           DEVICE_ID=$(echo "$DEST" | sed -n '1p')
           DEVICE_NAME=$(echo "$DEST" | sed -n '2p')
           echo "Using simulator: $DEVICE_NAME ($DEVICE_ID)"
