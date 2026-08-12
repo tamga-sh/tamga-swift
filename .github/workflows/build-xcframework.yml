@@ -10,7 +10,10 @@ name: Build XCFramework
 #
 # This job intentionally does NOT touch Package.swift -- that happens in
 # release.yml's post-release bot-commit job, which runs after this workflow
-# finishes and can read the asset URL + checksum this job produces.
+# finishes (triggered by `workflow_run`) and reads the checksum/asset-url
+# artifact this job uploads (see the "Write release info" step below --
+# `workflow_run`-triggered jobs cannot read another workflow's job
+# `outputs:` directly, only artifacts fetched via `run-id:`).
 
 on:
   push:
@@ -19,14 +22,20 @@ on:
   workflow_dispatch: {}
 
 jobs:
+  # Delegates to tamga-c's own reusable cross-compile matrix rather than
+  # duplicating it -- see that workflow's "REUSE POINT" comment. Artifacts
+  # it uploads are downloadable by the job below via actions/download-artifact
+  # since both jobs belong to this same overall workflow run.
+  build-native:
+    name: Build tamga-c native artifacts
+    uses: tamga-sh/tamga-c/.github/workflows/build-native.yml@main
+
   build-xcframework:
     name: Build & publish TamgaCore.xcframework
+    needs: build-native
     runs-on: macos-15
     permissions:
       contents: write
-    outputs:
-      checksum: ${{ steps.checksum.outputs.checksum }}
-      asset_url: ${{ steps.upload.outputs.url }}
     steps:
       - uses: actions/checkout@v4
 
@@ -35,31 +44,54 @@ jobs:
         with:
           xcode-version: "16.1"
 
-      # STUB: tamga-c has not published a reusable build-native.yml yet.
-      # Once it does, this step becomes:
-      #
-      #   - name: Build tamga-c native artifacts
-      #     uses: tamga-sh/tamga-c/.github/workflows/build-native.yml@main
-      #     with:
-      #       targets: macos-arm64,macos-x86_64,ios-arm64,ios-simulator-arm64,ios-simulator-x86_64
-      #
-      # via `workflow_call`. Left as a placeholder so this workflow file is
-      # valid YAML and documents the intended call shape.
-      - name: Build tamga-c native artifacts (PLACEHOLDER)
-        run: |
-          echo "PLACEHOLDER: call tamga-c's reusable build-native.yml via workflow_call once it exists."
-          echo "See docs/plans/tamga-swift.plan.md Section N and tamga-c's own release plan."
-          exit 1
+      # include/tamga.h isn't part of tamga-c's build-native.yml artifacts
+      # (that workflow only uploads compiled libraries) -- fetch it
+      # directly from tamga-c's source at the same ref this repo's
+      # CTamgaShim/module.modulemap expects to re-export.
+      - name: Checkout tamga-c (for include/tamga.h)
+        uses: actions/checkout@v4
+        with:
+          repository: tamga-sh/tamga-c
+          path: tamga-c-src
+          sparse-checkout: |
+            include
+
+      - name: Download all tamga-c build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
 
       - name: Assemble XCFramework
         run: |
           set -eu
-          # PLACEHOLDER: exact -library/-framework arguments depend on
-          # tamga-c's actual per-platform output layout, which does not
-          # exist yet.
+
+          mkdir -p build/slices/macos-universal build/slices/ios-simulator-universal
+
+          # macOS: one universal static lib covering Intel + Apple Silicon.
+          # An XCFramework takes exactly one library per platform+variant
+          # slice, so the two per-arch outputs from build-native.yml's
+          # matrix must be merged with lipo before xcodebuild ever sees them.
+          lipo -create \
+            dist/tamga-c-macos-x86_64/libtamga.a \
+            dist/tamga-c-macos-aarch64/libtamga.a \
+            -output build/slices/macos-universal/libtamga.a
+
+          # iOS Simulator: same reasoning -- one universal slice covering
+          # both an Apple Silicon dev machine's arm64 simulator and an
+          # Intel dev machine's x86_64 simulator.
+          lipo -create \
+            dist/tamga-c-ios-simulator-arm64/libtamga.a \
+            dist/tamga-c-ios-simulator-x86_64/libtamga.a \
+            -output build/slices/ios-simulator-universal/libtamga.a
+
+          # iOS device (arm64) has only one real target today and needs no
+          # lipo step -- used directly from build-native.yml's output.
+
           xcodebuild -create-xcframework \
+            -library build/slices/macos-universal/libtamga.a -headers tamga-c-src/include \
+            -library dist/tamga-c-ios-arm64/libtamga.a -headers tamga-c-src/include \
+            -library build/slices/ios-simulator-universal/libtamga.a -headers tamga-c-src/include \
             -output build/TamgaCore.xcframework
-          echo "PLACEHOLDER: fill in -library/-headers pairs per platform once tamga-c ships artifacts."
 
       - name: Zip XCFramework
         run: |
@@ -75,7 +107,25 @@ jobs:
           echo "checksum=${CHECKSUM}" >> "$GITHUB_OUTPUT"
 
       - name: Upload to GitHub Release
-        id: upload
         uses: softprops/action-gh-release@v2
         with:
           files: build/TamgaCore.xcframework.zip
+
+      # release.yml's update-package-manifest job runs in a SEPARATE
+      # workflow_run-triggered context and cannot read this job's own
+      # `outputs:` directly (workflow_run does not expose the triggering
+      # workflow's job outputs) -- hand the two values off via an artifact
+      # instead, which actions/download-artifact@v4's `run-id:` input can
+      # fetch from that other context.
+      - name: Write release info for release.yml to pick up
+        run: |
+          set -eu
+          mkdir -p info
+          printf '%s' "${{ steps.checksum.outputs.checksum }}" > info/checksum.txt
+          printf '%s' "https://github.com/tamga-sh/tamga-swift/releases/download/${{ github.ref_name }}/TamgaCore.xcframework.zip" > info/asset_url.txt
+
+      - name: Upload release info artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: xcframework-release-info
+          path: info/

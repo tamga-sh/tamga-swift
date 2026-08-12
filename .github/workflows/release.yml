@@ -60,25 +60,39 @@ jobs:
     name: Update Package.swift binaryTarget
     if: github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
+    # Explicit, not inherited from the top-level `permissions:` block — see
+    # tamga-c's package-and-attach job (release.yml) for why: a job-level
+    # `permissions:` omission has silently failed to inherit the
+    # workflow-level default in this SDK family before.
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
         with:
           ref: main
 
-      # PLACEHOLDER: reading a completed workflow_run's job outputs requires
-      # either the GitHub API (gh run view --json) or an artifact handoff,
-      # since `workflow_run` does not expose the triggering workflow's
-      # `outputs:` directly. Left as a documented placeholder pending
-      # tamga-c's actual release cadence -- fill in once build-xcframework.yml
-      # is producing real checksums.
-      - name: Fetch checksum + asset URL from build-xcframework.yml run
+      # `workflow_run` does not expose the triggering workflow's job
+      # `outputs:` directly -- there is no API field for a run's custom job
+      # outputs, only for its own jobs/logs/artifacts. The reliable handoff
+      # is an artifact: build-xcframework.yml's last step writes
+      # checksum.txt/asset_url.txt and uploads them under the
+      # "xcframework-release-info" name; `run-id:` + `github-token:` here
+      # let download-artifact reach into that OTHER run (by default it can
+      # only see artifacts from the run executing right now).
+      - name: Download checksum + asset URL from build-xcframework.yml run
+        uses: actions/download-artifact@v4
+        with:
+          name: xcframework-release-info
+          path: info
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Read checksum + asset URL
         id: artifact
         run: |
-          echo "PLACEHOLDER: gh run view ${{ github.event.workflow_run.id }} --json ..."
-          echo "checksum=PLACEHOLDER_UNTIL_TAMGA_C_RELEASES" >> "$GITHUB_OUTPUT"
-          echo "asset_url=https://github.com/tamga-sh/tamga-c/releases/download/vX.Y.Z/TamgaCore.xcframework.zip" >> "$GITHUB_OUTPUT"
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          set -eu
+          echo "checksum=$(cat info/checksum.txt)" >> "$GITHUB_OUTPUT"
+          echo "asset_url=$(cat info/asset_url.txt)" >> "$GITHUB_OUTPUT"
 
       - name: Patch Package.swift binaryTarget
         run: |
