@@ -163,9 +163,12 @@ source doc for the full set, including analytics/EE items that don't touch this 
   `xcrun llvm-cov export -summary-only` → `Scripts/check-coverage.sh`. Run the same pipeline
   locally before pushing if you're unsure a change clears the bar — see that script's header
   comment for the exact invocation.
-- Two CI jobs must both pass: `swift test` on macOS, `xcodebuild test -destination 'platform=iOS
-  Simulator,name=iPhone 16'` on iOS. The coverage gate lives only in the macOS job, not the iOS
-  one — they're intentionally not double-gated on the same threshold.
+- Two CI jobs must both pass: `swift test` on macOS, `xcodebuild test` against a fresh iOS
+  Simulator device on iOS. The device is created at run time from whichever runtime matches the
+  pinned Xcode's own default Simulator SDK (see `ci.yml`'s "Create an iOS Simulator device" step) —
+  not a hardcoded device name, which proved unreliable across GitHub's runner pool. The coverage
+  gate lives only in the macOS job, not the iOS one — they're intentionally not double-gated on the
+  same threshold.
 - Every `Tamga` type that touches the network or FFI must sit behind a protocol for test doubles
   (mock `URLSession` via a `MockURLProtocol` harness, mock FFI verifier) — see the
   `ecc:swift-protocol-di-testing` skill. Do not hit live network or call into the real
