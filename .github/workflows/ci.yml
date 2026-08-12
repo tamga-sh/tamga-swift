@@ -144,42 +144,39 @@ jobs:
         run: |
           python3 Scripts/ci-use-local-xcframework.py "build/TamgaCore.xcframework"
 
-      - name: Find an available iOS Simulator destination
+      - name: Create an iOS Simulator device
         id: sim
         run: |
           set -eu
-          # A hardcoded device name (e.g. "iPhone 16") is brittle, AND
-          # simctl's device list is not a safe substitute -- both confirmed
-          # directly on this exact runner/Xcode combination (macos-15 +
-          # Xcode 16.1 via maxim-lobanov/setup-xcode). A first fix queried
-          # `simctl list devices available` and picked "iPhone 16 Pro"; CI
-          # still failed with that device entirely absent from xcodebuild's
-          # own destination list (not even "ineligible") -- GitHub's runner
-          # images carry simulator devices/runtimes spanning multiple
-          # co-installed Xcode versions, and simctl's registry isn't scoped
-          # to whichever DEVELOPER_DIR is currently selected, but
-          # xcodebuild's destination resolution is. Asking xcodebuild
-          # itself -- the exact command about to run the test -- is the
-          # only way to know what IT considers valid. See
-          # Scripts/find-ios-simulator.py's header for the full account.
-          # A separate script file (not embedded Python here) avoids the
-          # YAML block-scalar indentation trap that broke an earlier
-          # draft of this step (dedented Python lines inside `run: |`
-          # terminated the block scalar early -- a real, confirmed parse
-          # failure, not a hypothetical one).
-          #
-          # Always logged (not just on failure): piping xcodebuild straight
-          # into the parser hides its raw output from the CI log entirely
-          # (only the pipeline's final stdout would show), which turned a
-          # previous failure here into a guessing exercise. Printing it
-          # first makes any future destination-selection failure
-          # self-diagnosing from the CI log alone.
-          xcodebuild -scheme Tamga-Package -showdestinations > /tmp/showdestinations.log 2>&1 || true
-          cat /tmp/showdestinations.log
-          DEST=$(python3 Scripts/find-ios-simulator.py < /tmp/showdestinations.log)
-          DEVICE_ID=$(echo "$DEST" | sed -n '1p')
-          DEVICE_NAME=$(echo "$DEST" | sed -n '2p')
-          echo "Using simulator: $DEVICE_NAME ($DEVICE_ID)"
+          # Searching for a pre-existing device -- whether via simctl or
+          # via xcodebuild's own -showdestinations -- is not reliable on
+          # this runner/Xcode combination (macos-15 + Xcode 16.1 via
+          # maxim-lobanov/setup-xcode), confirmed directly across three
+          # consecutive CI failures: simctl reported a device (`iPhone 16
+          # Pro`) that xcodebuild's own destination resolution didn't
+          # recognize at all (not even as "ineligible"); a follow-up run
+          # showed xcodebuild had NO concrete device for any platform --
+          # iOS, tvOS, watchOS, visionOS -- only the generic "Any ...
+          # Simulator Device" placeholders, which `xcodebuild test` cannot
+          # run against. GitHub's macOS runner pool is heterogeneous: which
+          # simulator devices happen to be pre-provisioned for a given
+          # (image, pinned Xcode version) pairing varies per ephemeral
+          # runner instance. The only reliable fix is to stop searching for
+          # a pre-existing device and create one fresh every run, from
+          # whichever iOS Simulator runtime Xcode 16.1 actually has bundled
+          # -- every Xcode ships at least one runtime matching its own SDK,
+          # unlike device *instances*, which are what varied above.
+          RUNTIME_JSON=$(xcrun simctl list runtimes available --json | jq -c '[.runtimes[] | select(.name | startswith("iOS"))][0]')
+          echo "iOS runtime: $RUNTIME_JSON"
+          if [ "$RUNTIME_JSON" = "null" ]; then
+            echo "::error::No available iOS Simulator runtime found under the selected Xcode."
+            exit 1
+          fi
+          RUNTIME_ID=$(echo "$RUNTIME_JSON" | jq -r '.identifier')
+          DEVICETYPE_ID=$(echo "$RUNTIME_JSON" | jq -r '[.supportedDeviceTypes[] | select(.name | startswith("iPhone"))][0].identifier')
+          echo "Using runtime $RUNTIME_ID with device type $DEVICETYPE_ID"
+          DEVICE_ID=$(xcrun simctl create tamga-ci-iphone "$DEVICETYPE_ID" "$RUNTIME_ID")
+          echo "Created simulator device: $DEVICE_ID"
           echo "id=$DEVICE_ID" >> "$GITHUB_OUTPUT"
 
       - name: Test on iOS Simulator
@@ -192,9 +189,8 @@ jobs:
           # action is populated. Found while fixing the binaryTarget
           # resolution above -- this was always unreachable before.
           #
-          # Destination is selected by id (a stable per-instance UUID), not
-          # name -- see the previous step and Scripts/find-ios-simulator.py
-          # for why a name match isn't reliable on this runner image.
+          # Destination is the simulator device created fresh in the
+          # previous step, selected by id (a stable per-instance UUID).
           xcodebuild test \
             -scheme Tamga-Package \
             -destination "platform=iOS Simulator,id=${{ steps.sim.outputs.id }}" \
