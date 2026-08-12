@@ -1,8 +1,17 @@
+import Foundation
+
 /// `Errors.swift`
 ///
-/// STUB -- scaffolding only. No error model implemented yet.
+/// **Scope note**: `TamgaCheckoutError` below covers exactly the failure
+/// modes `Checkout/LicenseFile.swift`, `Checkout/MachineFile.swift`, and
+/// `Proof.swift` can throw. The full JSON:API error envelope decoder (401/
+/// 403/404/409/500 handling, per-endpoint conflict/validation codes) for
+/// `TamgaClient`'s HTTP-facing surface is still deferred to a future session
+/// per `docs/plans/tamga-swift.plan.md` Section L -- see that section's
+/// intended `TamgaError` shape below, unchanged from before this file had
+/// any real implementation.
 ///
-/// Intended contents once implemented:
+/// Intended contents once implemented (HTTP-facing surface):
 ///
 /// - `TamgaError`: models the JSON:API error object
 ///   `{ status: UInt16, code: String, detail: String, pointer: String? }`.
@@ -30,4 +39,24 @@
 public enum TamgaError {
     // Intentionally empty. Implementation deferred to a future session per
     // docs/plans/tamga-swift.plan.md Section L.
+}
+
+/// Errors thrown by `Checkout/LicenseFile.swift`, `Checkout/MachineFile.swift`,
+/// and `Proof.swift`. Distinct from the (still-deferred) HTTP-facing
+/// `TamgaError` above -- these describe failures in parsing/verifying/
+/// decrypting an already-issued offline file or proof, not a live API call.
+public enum TamgaCheckoutError: Error, Equatable {
+    /// The PEM envelope or inner JSON is malformed.
+    case offlineFileFormat(String)
+    /// Signature verification failed -- the file may be forged or corrupted.
+    case signatureVerificationFailed
+    /// The certificate's `alg` field, or a caller-supplied scheme, isn't
+    /// recognized.
+    case unsupportedAlgorithm(String)
+    /// `RSA_2048_JWT_RS256` (or any other scheme never implemented for a
+    /// given file type) was requested explicitly.
+    case schemeNotSupported(String)
+    /// Client-side mirror of the server's `422 TTL_INVALID`: `ttl` must be
+    /// `> 0 && <= 31536000` (365 days).
+    case ttlInvalid(String)
 }
