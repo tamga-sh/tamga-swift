@@ -28,7 +28,11 @@ jobs:
   # since both jobs belong to this same overall workflow run.
   build-native:
     name: Build tamga-c native artifacts
-    uses: tamga-sh/tamga-c/.github/workflows/build-native.yml@main
+    # Pinned to tamga-c's latest tagged release, not @main -- tamga-c's own ABI-freeze commitment
+    # (struct layout/function signature changes require a version bump) is meaningless if this
+    # caller floats on unreleased main; bump this tag deliberately when tamga-c cuts a new release
+    # this repo should pick up, not implicitly on every tamga-c push.
+    uses: tamga-sh/tamga-c/.github/workflows/build-native.yml@v1.0.1
 
   build-xcframework:
     name: Build & publish TamgaCore.xcframework
