@@ -111,7 +111,7 @@ jobs:
           echo "checksum=${CHECKSUM}" >> "$GITHUB_OUTPUT"
 
       - name: Upload to GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: build/TamgaCore.xcframework.zip
 
