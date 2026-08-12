@@ -8,14 +8,18 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 activation and offline verification for macOS and iOS apps. It is one of two SDKs (with
 `tamga-java`) that do not reimplement Tamga's cryptographic verification logic natively; instead
 it binds to `tamga-c`, the Rust reference implementation exposed through a stable C ABI. Full task
-breakdown and current build status: [`docs/plans/tamga-swift.plan.md`](docs/plans/tamga-swift.plan.md).
+breakdown and current build status: [`../docs/plans/tamga-swift.plan.md`](../docs/plans/tamga-swift.plan.md)
+(lives one directory up, in the sibling `tamga-sdk` monorepo, not inside this repo).
 Protocol/feature spec this SDK is built against — every field name, endpoint, and enum value comes
 from here: [`tamga-api/docs/sdk.md`](https://github.com/tamga-sh/tamga-api/blob/main/docs/sdk.md).
 
-**Current state: scaffold only.** Package manifest, module layout, CI/release workflow shape, and
-doc-comment stubs exist. No HTTP transport, no crypto FFI wiring, no business logic. Do not assume
-any method on `TamgaClient` does anything yet — see the doc comment at the top of each stub file
-for what it will eventually do.
+**Current state: business logic is still 100% stub; CI/release infra is real.** Package manifest and
+module layout are in place, and CI/release infrastructure is now fully functional, not just
+scaffolded — `build-xcframework.yml` really builds and publishes `TamgaCore.xcframework`, and
+`release.yml`'s two-step flow really populates `Package.swift`'s binary target (see "Local
+Development" and Critical Dependency Notes below). But no HTTP transport, no crypto FFI wiring, and
+no business logic exists yet. Do not assume any method on `TamgaClient` does anything — see the doc
+comment at the top of each stub file for what it will eventually do.
 
 ## Crypto-Boundary Rule (read before touching `Sources/Tamga/FFI/`)
 
@@ -42,7 +46,7 @@ tamga-swift/
 │   ├── CTamgaShim/               — C target: makes tamga.h Swift-importable
 │   │   └── include/
 │   │       ├── module.modulemap
-│   │       └── shim.h            — thin re-export of tamga.h (stub until tamga-c v0.1 ships)
+│   │       └── shim.h            — real re-export of tamga.h (tamga-c has shipped v1.0.0/v1.0.1)
 │   ├── Tamga/                    — public Swift API (depends on CTamgaShim only for crypto)
 │   │   ├── TamgaClient.swift     — top-level client: config, all endpoint methods
 │   │   ├── Transport.swift       — URLSession-based HTTP layer, auth headers, content-type dispatch
@@ -63,11 +67,14 @@ tamga-swift/
 `tamga-web`-equivalent: there is no server here. `Tamga` is the library target apps link against;
 `TamgaObjC` is a thin wrapper for Objective-C-only consumers, not a separate implementation.
 
-## Local Development (tamga-c has no releases yet)
+## Local Development
 
-`Package.swift`'s `binaryTarget(url:checksum:)` is a **placeholder** — `tamga-c` has not published
-a v0.1 GitHub Release, so the URL/checksum cannot resolve. Until it does, build `tamga-c` locally
-and swap the binary target:
+`Package.swift`'s `binaryTarget(url:checksum:)` is populated automatically by `release.yml`'s
+post-release bot commit (see that file's header comment) once `tamga-c` has released and
+`build-xcframework.yml` has run — `tamga-c` has shipped tagged releases (v1.0.0, v1.0.1) and this
+pipeline is real, not a placeholder. If you need to iterate locally against a `tamga-c` checkout
+that hasn't been released yet (e.g. testing an unreleased `tamga-c` change end-to-end before cutting
+a release), build `tamga-c`'s XCFramework locally and swap the binary target:
 
 ```swift
 // Comment out the url:/checksum: binaryTarget in Package.swift and use:
@@ -77,9 +84,9 @@ and swap the binary target:
 ),
 ```
 
-This requires a sibling checkout of `tamga-c` with its XCFramework already built (see that repo's
-own build docs once they exist). Do not commit the `path:` variant — it only works on a machine
-with that sibling checkout present. Revert to the `url:`/`checksum:` form before pushing.
+This requires a sibling checkout of `tamga-c` with its XCFramework already built locally. Do not
+commit the `path:` variant — it only works on a machine with that sibling checkout present. Revert
+to the `url:`/`checksum:` form before pushing.
 
 ## Dev Commands
 
@@ -156,9 +163,12 @@ source doc for the full set, including analytics/EE items that don't touch this 
   `xcrun llvm-cov export -summary-only` → `Scripts/check-coverage.sh`. Run the same pipeline
   locally before pushing if you're unsure a change clears the bar — see that script's header
   comment for the exact invocation.
-- Two CI jobs must both pass: `swift test` on macOS, `xcodebuild test -destination 'platform=iOS
-  Simulator,name=iPhone 16'` on iOS. The coverage gate lives only in the macOS job, not the iOS
-  one — they're intentionally not double-gated on the same threshold.
+- Two CI jobs must both pass: `swift test` on macOS, `xcodebuild test` against a fresh iOS
+  Simulator device on iOS. The device is created at run time from whichever runtime matches the
+  pinned Xcode's own default Simulator SDK (see `ci.yml`'s "Create an iOS Simulator device" step) —
+  not a hardcoded device name, which proved unreliable across GitHub's runner pool. The coverage
+  gate lives only in the macOS job, not the iOS one — they're intentionally not double-gated on the
+  same threshold.
 - Every `Tamga` type that touches the network or FFI must sit behind a protocol for test doubles
   (mock `URLSession` via a `MockURLProtocol` harness, mock FFI verifier) — see the
   `ecc:swift-protocol-di-testing` skill. Do not hit live network or call into the real
@@ -166,11 +176,13 @@ source doc for the full set, including analytics/EE items that don't touch this 
 
 ## Critical Dependency Notes
 
-- **`tamga-c`'s ABI-freeze commitment is a hard blocker for this repo.** `tamga.h` must be frozen
-  for one full release cycle with exported-symbol-table and struct-layout semver guarantees before
-  `Sources/CTamgaShim/include/shim.h` can be populated with a real re-export. Until then, `shim.h`
-  is an intentionally empty stub — do not hand-transcribe partial/unstable `tamga.h` declarations
-  into it; that's how this SDK silently drifts from `tamga-c`'s actual runtime ABI.
+- **`tamga-c`'s ABI-freeze commitment still governs `shim.h`, but is no longer a blocker.** `tamga-c`
+  has shipped tagged releases (v1.0.0, v1.0.1) with a frozen `tamga.h`, and
+  `Sources/CTamgaShim/include/shim.h` is now a real re-export (`#include <tamga.h>`) rather than a
+  stub — see that file's own header comment. The constraint that still applies going forward: struct
+  layout and function signature changes in `tamga.h` require a version bump on `tamga-c`'s side, no
+  silent breaking changes — do not hand-transcribe `tamga.h` declarations into `shim.h` by hand even
+  now, the `#include` is what keeps this file from ever drifting from `tamga-c`'s actual ABI.
 - **SPM has no central package registry for this SDK** — unlike `tamga-python` (PyPI) or
   `tamga-js` (npm), there is no name-collision concern and no publish step. The git tag *is* the
   release; `release.yml` and `build-xcframework.yml` are the entire release surface.
