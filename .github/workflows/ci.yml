@@ -162,14 +162,28 @@ jobs:
           # simulator devices happen to be pre-provisioned for a given
           # (image, pinned Xcode version) pairing varies per ephemeral
           # runner instance. The only reliable fix is to stop searching for
-          # a pre-existing device and create one fresh every run, from
-          # whichever iOS Simulator runtime Xcode 16.1 actually has bundled
-          # -- every Xcode ships at least one runtime matching its own SDK,
-          # unlike device *instances*, which are what varied above.
-          RUNTIME_JSON=$(xcrun simctl list runtimes available --json | jq -c '[.runtimes[] | select(.name | startswith("iOS"))][0]')
-          echo "iOS runtime: $RUNTIME_JSON"
+          # a pre-existing device and create one fresh every run.
+          #
+          # A first version of this fix picked whichever available iOS
+          # runtime simctl listed first, system-wide -- confirmed directly
+          # that this still fails: it picked an iOS 18.5 runtime installed
+          # as a separate CoreSimulator volume
+          # (/Library/Developer/CoreSimulator/Volumes/...), simctl created
+          # the device fine, but xcodebuild test STILL reported zero iOS
+          # Simulator destinations -- that runtime isn't bundled with the
+          # selected Xcode, so xcodebuild doesn't consider it "installed"
+          # for itself, even though CoreSimulator has it mounted and simctl
+          # is happy to hand out devices against it. Scoping the runtime
+          # search to one whose bundlePath actually lives under the
+          # selected Xcode's own app bundle (via `xcode-select -p`) is what
+          # makes xcodebuild itself recognize the resulting device.
+          DEVELOPER_DIR=$(xcode-select -p)
+          XCODE_APP="${DEVELOPER_DIR%/Contents/Developer}"
+          echo "Selected Xcode: $XCODE_APP"
+          RUNTIME_JSON=$(xcrun simctl list runtimes available --json | jq -c --arg prefix "$XCODE_APP" '[.runtimes[] | select(.name | startswith("iOS")) | select(.bundlePath | startswith($prefix))][0]')
+          echo "iOS runtime bundled with $XCODE_APP: $RUNTIME_JSON"
           if [ "$RUNTIME_JSON" = "null" ]; then
-            echo "::error::No available iOS Simulator runtime found under the selected Xcode."
+            echo "::error::No iOS Simulator runtime bundled with $XCODE_APP was found. Falling back to a runtime from elsewhere on the system is unsafe -- xcodebuild only recognizes runtimes bundled with the selected Xcode as valid destinations (confirmed directly: see this step's header comment)."
             exit 1
           fi
           RUNTIME_ID=$(echo "$RUNTIME_JSON" | jq -r '.identifier')
