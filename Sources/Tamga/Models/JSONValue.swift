@@ -2,14 +2,25 @@ import Foundation
 
 /// A minimal, fully `Codable`/`Equatable`/`Sendable` representation of an
 /// arbitrary JSON value -- used for the caller-supplied `metadata` bags on
-/// `License`/`Machine` (arbitrary key/value data with no fixed schema),
-/// mirroring what `Dictionary<string, JsonElement>` does in tamga-dotnet.
+/// `License`/`Machine` and for `Proof`'s canonical-JSON-signed `dataset`
+/// (arbitrary key/value data with no fixed schema), mirroring what
+/// `Dictionary<string, JsonElement>`/`JsonNode` do in tamga-dotnet.
 /// Foundation's `JSONSerialization` produces `Any`, which isn't `Equatable`
-/// or `Sendable` -- this exists so metadata round-trips through tests and
-/// value semantics cleanly instead of reaching for an untyped escape hatch.
+/// or `Sendable` -- this exists so metadata/datasets round-trip through
+/// tests and value semantics cleanly instead of reaching for an untyped
+/// escape hatch.
+///
+/// `.int` and `.double` are distinct cases, not one `.number(Double)` case:
+/// collapsing them would silently reformat a plain integer field (e.g.
+/// `5`) as a float (`5.0`) when re-serialized by `CanonicalJson` -- a byte
+/// for the signed payload doesn't match what a caller's dataset actually
+/// contained, breaking `Proof` signature verification for any dataset with
+/// an integer field. Decoding tries `Int64` before `Double` so a wire value
+/// like `"42"` decodes as `.int(42)`, not `.double(42.0)`.
 public indirect enum JSONValue: Codable, Equatable, Sendable {
     case string(String)
-    case number(Double)
+    case int(Int64)
+    case double(Double)
     case bool(Bool)
     case object([String: JSONValue])
     case array([JSONValue])
@@ -21,8 +32,10 @@ public indirect enum JSONValue: Codable, Equatable, Sendable {
             self = .null
         } else if let value = try? container.decode(Bool.self) {
             self = .bool(value)
+        } else if let value = try? container.decode(Int64.self) {
+            self = .int(value)
         } else if let value = try? container.decode(Double.self) {
-            self = .number(value)
+            self = .double(value)
         } else if let value = try? container.decode(String.self) {
             self = .string(value)
         } else if let value = try? container.decode([String: JSONValue].self) {
@@ -38,7 +51,8 @@ public indirect enum JSONValue: Codable, Equatable, Sendable {
         var container = encoder.singleValueContainer()
         switch self {
         case .string(let value): try container.encode(value)
-        case .number(let value): try container.encode(value)
+        case .int(let value): try container.encode(value)
+        case .double(let value): try container.encode(value)
         case .bool(let value): try container.encode(value)
         case .object(let value): try container.encode(value)
         case .array(let value): try container.encode(value)
