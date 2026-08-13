@@ -62,6 +62,14 @@ public enum TamgaCheckoutError: Error, Equatable {
     /// The certificate's `alg` field, or a caller-supplied scheme, isn't
     /// recognized.
     case unsupportedAlgorithm(String)
+    /// The file's signature verified, but its signed `exp` claim has passed --
+    /// an authentic license file that has simply run out.
+    ///
+    /// Its own case on purpose: a caller that cannot tell "expired" from
+    /// "forged" either warns the user about tampering when their trial merely
+    /// ended, or treats a forgery as a renewal prompt. The associated value is
+    /// the `exp` claim, seconds since the Unix epoch.
+    case expired(Int64)
     /// `RSA_2048_JWT_RS256` (or any other scheme never implemented for a
     /// given file type) was requested explicitly.
     case schemeNotSupported(String)
@@ -81,6 +89,8 @@ extension TamgaCheckoutError: LocalizedError {
             return message
         case .unsupportedAlgorithm(let message):
             return message
+        case .expired(let exp):
+            return "License file expired at unix timestamp \(exp)."
         case .schemeNotSupported(let message):
             return message
         case .ttlInvalid(let message):

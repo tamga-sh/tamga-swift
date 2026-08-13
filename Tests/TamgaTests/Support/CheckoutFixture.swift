@@ -88,9 +88,18 @@ enum CheckoutFixture {
     }
 
     /// A minimal, valid `{"data": {...}}` license-resource JSON payload.
-    static func licensePayloadJSON(key: String = "TEST-LICENSE-KEY", suspended: Bool = false) -> Data {
+    /// Format v2 puts the claims inside the signed bytes; a payload without
+    /// them is a v1 file and no longer verifies. `exp` is omitted unless asked
+    /// for, matching a checkout made without a `ttl`.
+    static func licensePayloadJSON(
+        key: String = "TEST-LICENSE-KEY",
+        suspended: Bool = false,
+        exp: Int64? = nil
+    ) -> Data {
+        let expField = exp.map { ",\"exp\":\($0)" } ?? ""
         let json = """
-        {"data":{"id":"lic_123","type":"licenses","attributes":{"key":"\(key)","suspended":\(suspended),"uses":0}}}
+        {"data":{"id":"lic_123","type":"licenses","attributes":{"key":"\(key)","suspended":\(suspended),"uses":0}},\
+        "meta":{"iat":1767225600,"jti":"test-jti","kid":"test-kid"\(expField)}}
         """
         return Data(json.utf8)
     }
@@ -107,7 +116,8 @@ enum CheckoutFixture {
           "last_validated_at":"2026-08-01T12:00:00.500Z",
           "last_check_in_at":"2026-07-15T09:30:00Z",
           "metadata":{"seats":5,"tier":"pro","trial":false,"note":null}
-        }}}
+        }},
+        "meta":{"iat":1767225600,"jti":"test-jti","kid":"test-kid"}}
         """
         return Data(json.utf8)
     }
