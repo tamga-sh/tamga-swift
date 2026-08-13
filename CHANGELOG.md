@@ -1,5 +1,16 @@
 # Changelog
 
+## [2.0.0](https://github.com/tamga-sh/tamga-swift/compare/v1.0.0...v2.0.0) (2026-08-13)
+
+
+### ⚠ BREAKING CHANGES
+
+* offline license files must be format v2 (`alg` ending in `+v2`). v1 files are rejected outright with no compatibility path. `Crypto/NaiveKey.swift` is removed, not deprecated.
+
+### Features
+
+* license-file HKDF + offline format v2 ([6359058](https://github.com/tamga-sh/tamga-swift/commit/63590587e3cb300a4b05d94093675cde6430ae24))
+
 ## 1.0.0 (2026-08-12)
 
 
