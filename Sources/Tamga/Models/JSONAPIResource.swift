@@ -12,8 +12,32 @@ struct JSONAPIResource<Attributes: Decodable>: Decodable {
     let attributes: Attributes?
 }
 
-/// The `{"data": <resource>}` payload embedded in a plain (unencrypted)
-/// offline checkout file, generic over the wrapped resource's attribute type.
+/// The `{"data": <resource>, "meta": <claims>}` payload embedded in an offline
+/// checkout file, generic over the wrapped resource's attribute type.
 struct JSONAPIPayload<Attributes: Decodable>: Decodable {
     let data: JSONAPIResource<Attributes>
+    /// Present on format-v2 license files. Absent on a pre-v2 file, which is
+    /// rejected, and on machine files, which carry no claims today.
+    let meta: LicenseFileClaims?
+}
+
+/// The claims carried *inside* the signed bytes of a `.lic` file.
+///
+/// These are the point of format v2. In v1 the `ttl`/`expiry` a caller asked
+/// for lived only in the JSON:API envelope around the certificate, never inside
+/// the signed bytes -- so a 24-hour trial file was cryptographically valid
+/// forever, because the client is the attacker and any check built on the
+/// envelope is bypassed by keeping (or redistributing) the raw certificate
+/// string. Unlike the envelope, these cannot be edited by whoever holds the
+/// file.
+public struct LicenseFileClaims: Decodable, Equatable, Sendable {
+    /// Issued-at, seconds since the Unix epoch.
+    public let iat: Int64
+    /// Expiry, seconds since the Unix epoch. `nil` means the file never
+    /// expires -- checkout was made without a `ttl`.
+    public let exp: Int64?
+    /// Unique per checkout -- usable for replay detection.
+    public let jti: String
+    /// Identifies the signing key, so a file survives a key rotation.
+    public let kid: String
 }

@@ -12,7 +12,7 @@ struct LicenseFileTests {
         let json = CheckoutFixture.licensePayloadJSON()
         let enc = CheckoutFixture.plainEnc(json: json)
         let sig = CheckoutFixture.ed25519Sign(enc: enc, privateKey: key)
-        let pem = CheckoutFixture.wrapLicensePEM(enc: enc, sig: sig, alg: "base64+ed25519")
+        let pem = CheckoutFixture.wrapLicensePEM(enc: enc, sig: sig, alg: "base64+ed25519+v2")
 
         let file = try LicenseFile.parse(pem)
         #expect(try file.verify(publicKey: key.publicKey.rawRepresentation))
@@ -24,7 +24,7 @@ struct LicenseFileTests {
         let json = CheckoutFixture.fullLicensePayloadJSON(key: "TAMGA-FULL-FIELDS")
         let enc = CheckoutFixture.plainEnc(json: json)
         let sig = CheckoutFixture.ed25519Sign(enc: enc, privateKey: key)
-        let pem = CheckoutFixture.wrapLicensePEM(enc: enc, sig: sig, alg: "base64+ed25519")
+        let pem = CheckoutFixture.wrapLicensePEM(enc: enc, sig: sig, alg: "base64+ed25519+v2")
 
         let file = try LicenseFile.parse(pem)
         let license = try file.verifyAndDecrypt(
@@ -47,7 +47,7 @@ struct LicenseFileTests {
         let json = CheckoutFixture.licensePayloadJSON(key: "TAMGA-ABC-123")
         let enc = CheckoutFixture.plainEnc(json: json)
         let sig = CheckoutFixture.ed25519Sign(enc: enc, privateKey: key)
-        let pem = CheckoutFixture.wrapLicensePEM(enc: enc, sig: sig, alg: "base64+ed25519")
+        let pem = CheckoutFixture.wrapLicensePEM(enc: enc, sig: sig, alg: "base64+ed25519+v2")
 
         let file = try LicenseFile.parse(pem)
         let license = try file.verifyAndDecrypt(
@@ -63,11 +63,11 @@ struct LicenseFileTests {
     func verifyAndDecryptReturnsLicenseForEncryptedFile() throws {
         let signingKey = Curve25519.Signing.PrivateKey()
         let licenseKey = "TAMGA-ENCRYPTED-KEY"
-        let aesKey = NaiveKey.derive(licenseKey: licenseKey)
+        let aesKey = Hkdf.deriveLicenseFileKey(licenseKey: licenseKey)
         let json = CheckoutFixture.licensePayloadJSON(key: licenseKey)
         let enc = CheckoutFixture.encryptedEnc(json: json, key: aesKey)
         let sig = CheckoutFixture.ed25519Sign(enc: enc, privateKey: signingKey)
-        let pem = CheckoutFixture.wrapLicensePEM(enc: enc, sig: sig, alg: "aes-256-gcm+ed25519")
+        let pem = CheckoutFixture.wrapLicensePEM(enc: enc, sig: sig, alg: "aes-256-gcm+ed25519+v2")
 
         let file = try LicenseFile.parse(pem)
         let license = try file.verifyAndDecrypt(
@@ -80,11 +80,11 @@ struct LicenseFileTests {
     @Test("verifyAndDecrypt throws decryptionFailed for the wrong license key on an encrypted file")
     func verifyAndDecryptThrowsForWrongLicenseKey() throws {
         let signingKey = Curve25519.Signing.PrivateKey()
-        let aesKey = NaiveKey.derive(licenseKey: "REAL-KEY")
+        let aesKey = Hkdf.deriveLicenseFileKey(licenseKey: "REAL-KEY")
         let json = CheckoutFixture.licensePayloadJSON(key: "REAL-KEY")
         let enc = CheckoutFixture.encryptedEnc(json: json, key: aesKey)
         let sig = CheckoutFixture.ed25519Sign(enc: enc, privateKey: signingKey)
-        let pem = CheckoutFixture.wrapLicensePEM(enc: enc, sig: sig, alg: "aes-256-gcm+ed25519")
+        let pem = CheckoutFixture.wrapLicensePEM(enc: enc, sig: sig, alg: "aes-256-gcm+ed25519+v2")
 
         let file = try LicenseFile.parse(pem)
         // Distinct from signatureVerificationFailed -- the Ed25519 signature
@@ -112,7 +112,7 @@ struct LicenseFileTests {
         // Deliberately sign the DECODED bytes (json) instead of enc's string bytes.
         let wrongSignature = try key.signature(for: json)
         let sig = wrongSignature.base64EncodedString()
-        let pem = CheckoutFixture.wrapLicensePEM(enc: enc, sig: sig, alg: "base64+ed25519")
+        let pem = CheckoutFixture.wrapLicensePEM(enc: enc, sig: sig, alg: "base64+ed25519+v2")
 
         let file = try LicenseFile.parse(pem)
         let verified = try file.verify(publicKey: key.publicKey.rawRepresentation)
@@ -125,7 +125,7 @@ struct LicenseFileTests {
         let json = CheckoutFixture.licensePayloadJSON()
         let enc = CheckoutFixture.plainEnc(json: json)
         let sig = CheckoutFixture.ed25519Sign(enc: enc, privateKey: key)
-        let pem = CheckoutFixture.wrapLicensePEM(enc: enc + "tampered", sig: sig, alg: "base64+ed25519")
+        let pem = CheckoutFixture.wrapLicensePEM(enc: enc + "tampered", sig: sig, alg: "base64+ed25519+v2")
 
         let file = try LicenseFile.parse(pem)
         let verified = try file.verify(publicKey: key.publicKey.rawRepresentation)
@@ -139,7 +139,7 @@ struct LicenseFileTests {
         let json = CheckoutFixture.licensePayloadJSON()
         let enc = CheckoutFixture.plainEnc(json: json)
         let sig = CheckoutFixture.ed25519Sign(enc: enc, privateKey: signingKey)
-        let pem = CheckoutFixture.wrapLicensePEM(enc: enc, sig: sig, alg: "base64+ed25519")
+        let pem = CheckoutFixture.wrapLicensePEM(enc: enc, sig: sig, alg: "base64+ed25519+v2")
 
         let file = try LicenseFile.parse(pem)
         let verified = try file.verify(publicKey: otherKey.publicKey.rawRepresentation)
@@ -216,7 +216,7 @@ struct LicenseFileTests {
     @Test("verify returns false for a malformed base64 signature")
     func verifyReturnsFalseForMalformedBase64Signature() throws {
         let key = Curve25519.Signing.PrivateKey()
-        let pem = CheckoutFixture.wrapLicensePEM(enc: "AA==", sig: "not valid base64!!!", alg: "base64+ed25519")
+        let pem = CheckoutFixture.wrapLicensePEM(enc: "AA==", sig: "not valid base64!!!", alg: "base64+ed25519+v2")
 
         let file = try LicenseFile.parse(pem)
         #expect(try !file.verify(publicKey: key.publicKey.rawRepresentation))
@@ -230,7 +230,7 @@ struct LicenseFileTests {
         let key = Curve25519.Signing.PrivateKey()
         let enc = "not valid base64!!!"
         let sig = CheckoutFixture.ed25519Sign(enc: enc, privateKey: key)
-        let pem = CheckoutFixture.wrapLicensePEM(enc: enc, sig: sig, alg: "base64+ed25519")
+        let pem = CheckoutFixture.wrapLicensePEM(enc: enc, sig: sig, alg: "base64+ed25519+v2")
 
         let file = try LicenseFile.parse(pem)
         #expect(throws: TamgaCheckoutError.self) {
@@ -243,7 +243,7 @@ struct LicenseFileTests {
         let key = Curve25519.Signing.PrivateKey()
         let enc = Data("not resource json".utf8).base64EncodedString()
         let sig = CheckoutFixture.ed25519Sign(enc: enc, privateKey: key)
-        let pem = CheckoutFixture.wrapLicensePEM(enc: enc, sig: sig, alg: "base64+ed25519")
+        let pem = CheckoutFixture.wrapLicensePEM(enc: enc, sig: sig, alg: "base64+ed25519+v2")
 
         let file = try LicenseFile.parse(pem)
         #expect(throws: TamgaCheckoutError.self) {
@@ -256,7 +256,7 @@ struct LicenseFileTests {
         let key = Curve25519.Signing.PrivateKey()
         let enc = Data([0x01, 0x02, 0x03]).base64EncodedString() // far shorter than 12+16 bytes
         let sig = CheckoutFixture.ed25519Sign(enc: enc, privateKey: key)
-        let pem = CheckoutFixture.wrapLicensePEM(enc: enc, sig: sig, alg: "aes-256-gcm+ed25519")
+        let pem = CheckoutFixture.wrapLicensePEM(enc: enc, sig: sig, alg: "aes-256-gcm+ed25519+v2")
 
         let file = try LicenseFile.parse(pem)
         #expect(throws: TamgaCheckoutError.self) {

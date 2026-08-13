@@ -9,8 +9,8 @@ struct LicenseFileCertificate: Decodable {
     /// Base64-encoded Ed25519 signature, computed over the ASCII/UTF-8 bytes
     /// of `enc`'s base64 string itself, not the decoded payload bytes.
     let sig: String
-    /// Algorithm identifier -- exactly `"base64+ed25519"` (plain) or
-    /// `"aes-256-gcm+ed25519"` (encrypted).
+    /// Algorithm identifier -- exactly `"base64+ed25519+v2"` (plain) or
+    /// `"aes-256-gcm+ed25519+v2"` (encrypted).
     let alg: String
 }
 
@@ -21,7 +21,11 @@ struct LicenseFileCertificate: Decodable {
 /// -----END LICENSE FILE-----
 /// ```
 ///
-/// `alg` is exactly `"base64+ed25519"` (plain) or `"aes-256-gcm+ed25519"`
+/// The `+v2` suffix is load-bearing: a v1 file carried no expiry inside its
+/// signature, so accepting one would hand back the permanent-file problem v2
+/// exists to close.
+///
+/// `alg` is exactly `"base64+ed25519+v2"` (plain) or `"aes-256-gcm+ed25519+v2"`
 /// (encrypted) -- Ed25519 ONLY for the checkout signature, independent of
 /// the license's own `scheme` (contrast with `MachineFile`, which dispatches
 /// by scheme).
@@ -86,7 +90,7 @@ public struct LicenseFile: Sendable {
         // LicenseFile's `alg` is always ed25519 and always one of exactly
         // these two literals, so exact equality is both correct and
         // stricter.
-        guard certificate.alg == "base64+ed25519" || certificate.alg == "aes-256-gcm+ed25519" else {
+        guard certificate.alg == "base64+ed25519+v2" || certificate.alg == "aes-256-gcm+ed25519+v2" else {
             throw TamgaCheckoutError.unsupportedAlgorithm(
                 "Unsupported license file algorithm: '\(certificate.alg)'. " +
                 "Only ed25519-signed license files are supported."
@@ -111,10 +115,38 @@ public struct LicenseFile: Sendable {
     /// JSON into a `License`.
     ///
     /// - Parameter licenseKey: used to derive the AES-256-GCM key (via
-    ///   `NaiveKey`) for an encrypted file. Ignored for a plain (unencrypted)
+    ///   `Hkdf`) for an encrypted file. Ignored for a plain (unencrypted)
     ///   file, but still required by this method's signature for a uniform
     ///   call shape across both cases.
     public func verifyAndDecrypt(publicKey: Data, licenseKey: String) throws -> License {
+        try verifyWithClaims(
+            publicKey: publicKey,
+            licenseKey: licenseKey,
+            now: Int64(Date().timeIntervalSince1970)
+        ).license
+    }
+
+    /// How much clock skew is tolerated when checking `exp`.
+    ///
+    /// Deliberately small. The client's clock is under the attacker's control,
+    /// so a generous allowance is just a free extension on every expired file;
+    /// this covers ordinary NTP drift and nothing more.
+    static let clockSkewToleranceSeconds: Int64 = 60
+
+    /// As `verifyAndDecrypt(publicKey:licenseKey:)`, also returning the signed
+    /// claims and taking the current time from the caller.
+    ///
+    /// Two uses for `now`. Tests get determinism. And an application that keeps
+    /// a server-supplied timestamp -- the recommended defence against a user
+    /// winding the system clock back to revive an expired file -- can pass that
+    /// instead of trusting the local clock.
+    ///
+    /// Expiry is enforced either way; it is not opt-in.
+    public func verifyWithClaims(
+        publicKey: Data,
+        licenseKey: String,
+        now: Int64
+    ) throws -> (license: License, claims: LicenseFileClaims) {
         guard try verify(publicKey: publicKey) else {
             throw TamgaCheckoutError.signatureVerificationFailed
         }
@@ -125,9 +157,9 @@ public struct LicenseFile: Sendable {
 
         let jsonBytes: Data
         switch certificate.alg {
-        case "aes-256-gcm+ed25519":
+        case "aes-256-gcm+ed25519+v2":
             jsonBytes = try Self.decryptPayload(payloadBytes, licenseKey: licenseKey)
-        case "base64+ed25519":
+        case "base64+ed25519+v2":
             jsonBytes = payloadBytes
         default:
             // Defensive: unreachable in practice since `verify(publicKey:)`
@@ -145,14 +177,26 @@ public struct LicenseFile: Sendable {
             throw TamgaCheckoutError.offlineFileFormat("License file payload JSON is malformed: \(error)")
         }
 
-        return License.fromResource(payload.data)
+        // Second line behind the alg gate: a file must not reach the expiry
+        // check with nothing to check.
+        guard let claims = payload.meta else {
+            throw TamgaCheckoutError.offlineFileFormat(
+                "License file payload is missing the signed 'meta' claims (this looks like a pre-v2 file)."
+            )
+        }
+
+        // The signature proves the file is authentic. It does not prove it is
+        // still valid -- that is this check, and skipping it is what made v1
+        // files permanent.
+        if let exp = claims.exp, now - Self.clockSkewToleranceSeconds > exp {
+            throw TamgaCheckoutError.expired(exp)
+        }
+
+        return (License.fromResource(payload.data), claims)
     }
 
     private static func decryptPayload(_ payloadBytes: Data, licenseKey: String) throws -> Data {
-        // CRITICAL: not a KDF -- see NaiveKey.swift. Zero-pad/truncate
-        // transform of the raw license key string, exactly as the server
-        // derives its own AES key for this format.
-        let key = NaiveKey.derive(licenseKey: licenseKey)
+        let key = Hkdf.deriveLicenseFileKey(licenseKey: licenseKey)
         return try EncryptedPayloadDecryptor.decrypt(payloadBytes, key: key, context: "Encrypted license file")
     }
 }

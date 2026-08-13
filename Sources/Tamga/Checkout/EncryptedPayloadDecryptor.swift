@@ -2,7 +2,7 @@ import Foundation
 
 /// Shared `nonce || ciphertext || tag` slicing + AES-256-GCM open logic for
 /// `LicenseFile` and `MachineFile` -- the two types are identical here except
-/// for which KDF derives `key` (`NaiveKey` vs. `Hkdf`, see each type's own
+/// for which `Hkdf` derivation produced `key` (see that type's own
 /// remarks), so that key is the only thing callers supply.
 enum EncryptedPayloadDecryptor {
     static func decrypt(_ payloadBytes: Data, key: Data, context: String) throws -> Data {
