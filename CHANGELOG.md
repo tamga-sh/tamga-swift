@@ -1,6 +1,6 @@
 # Changelog
 
-## [2.0.0](https://github.com/tamga-sh/tamga-swift/compare/v1.0.0...v2.0.0) (2026-08-13)
+## [1.1.0](https://github.com/tamga-sh/tamga-swift/compare/v1.0.0...v1.1.0) (2026-08-13)
 
 
 ### ⚠ BREAKING CHANGES
