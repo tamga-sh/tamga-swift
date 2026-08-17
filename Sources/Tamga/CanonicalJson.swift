@@ -28,7 +28,7 @@ enum CanonicalJson {
             // values (e.g. whole numbers, simple decimals) format
             // identically -- but this is not exhaustively verified against
             // serde_json across every float edge case. Prefer .int for
-          // whole-number dataset fields where possible.
+            // whole-number dataset fields where possible.
             output += String(value)
         case .string(let value):
             writeEscapedString(value, into: &output)

@@ -40,10 +40,18 @@ struct MachineFileCertificate: Decodable {
 /// `TamgaCheckoutError.schemeNotSupported` immediately rather than silently
 /// no-op-ing.
 ///
-/// Encryption key derivation is HKDF-SHA256 (`Hkdf`) -- NOT the naive
-/// zero-pad/truncate scheme used by license checkout (`NaiveKey`).
-/// Decryption requires BOTH the license key AND the target machine's
-/// fingerprint. GOTCHA: `ttl` is server-validated `> 0 && <= 31536000` (365
+/// Encryption key derivation is HKDF-SHA256 (`Hkdf.deriveMachineFileKey`):
+/// `salt = "tamga:machine-file-key-v1"`, `ikm = <license key>`,
+/// `info = <fingerprint>`. License files use the same primitive with a
+/// different salt and info (`Hkdf.deriveLicenseFileKey`) -- same KDF, never
+/// the same key. Decryption here requires BOTH the license key AND the target
+/// machine's fingerprint, which is what binds a machine file to one machine.
+///
+/// Unlike a license file, a machine file carries no signed `meta` claims and
+/// is not subject to the `+v2` `alg` check -- its expiry is not enforced
+/// client-side here.
+///
+/// GOTCHA: `ttl` is server-validated `> 0 && <= 31536000` (365
 /// days) -- the SDK's checkout call validates this client-side too, to fail
 /// fast, in addition to handling the server's `422 TTL_INVALID`.
 ///
