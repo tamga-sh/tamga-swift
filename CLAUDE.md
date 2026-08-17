@@ -8,20 +8,22 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 activation and offline verification for macOS and iOS apps. It reimplements Tamga's cryptographic
 verification logic natively in Swift (CryptoKit + the Security framework) — the same architecture as
 `tamga-python`/`tamga-go`/`tamga-js`/`tamga-dotnet` — so divergence from the Rust reference
-implementation in the crypto sections is a real interop bug, not a style choice. Full task
-breakdown and current build status: [`../docs/plans/tamga-swift.plan.md`](../docs/plans/tamga-swift.plan.md)
-(lives one directory up, in the sibling `tamga-sdk` monorepo, not inside this repo).
-Protocol/feature spec this SDK is built against — every field name, endpoint, and enum value comes
-from here: [`tamga-api/docs/sdk.md`](https://github.com/tamga-sh/tamga-api/blob/main/docs/sdk.md).
+implementation in the crypto sections is a real interop bug, not a style choice. The full task
+breakdown lives in `docs/plans/tamga-swift.plan.md` in the sibling `tamga-sdk` working tree, one
+directory up — it is not part of this repository, so do not link to it from anything a consumer
+reads. The protocol/feature spec this SDK is built against — every field name, endpoint, and enum
+value comes from it — is the server-side `docs/sdk.md`, which lives in a private repository;
+public-facing docs must point at <https://tamga.sh> instead.
 
 **Current state: crypto/checkout/proof are real; HTTP client surface is still stub.**
-`Sources/Tamga/Crypto/` (Ed25519, AES-256-GCM, HKDF-SHA256, ECDSA-P256, RSA PKCS1/PSS, the naive
-license-key derivation), `Checkout/` (`LicenseFile`, `MachineFile`), and `Proof.swift`
-(`MachineProof` + `CanonicalJson`) are implemented and tested (115+ tests, 97%+ line coverage). The
+`Sources/Tamga/Crypto/` (Ed25519, AES-256-GCM, HKDF-SHA256, ECDSA-P256, RSA PKCS1/PSS, DER),
+`Checkout/` (`LicenseFile`, `MachineFile`), and `Proof.swift`
+(`MachineProof` + `CanonicalJson`) are implemented and tested (118 tests; CI gates 80% line
+coverage and the suite currently sits well above it). The
 HTTP-facing surface (`TamgaClient`'s endpoint methods, `Transport.swift`, the full JSON:API error
 model, entitlement caching, heartbeat scheduling, the full `Policy` struct) is still stub — see each
-of those files' own doc comments for what's deferred and to which plan section. Do not assume any
-method on `TamgaClient` does anything yet.
+of those files' own doc comments for what's deferred. Do not assume any method on `TamgaClient`
+does anything yet.
 
 Until 2026-08-12 this package instead bound to `tamga-c` (the Rust reference implementation) via a
 C FFI boundary and a `TamgaCore` binary target, mirroring `tamga-java`'s JNI approach — deliberately
@@ -35,8 +37,9 @@ The four crypto operations Tamga's protocol needs, and what backs each one in
 `Sources/Tamga/Crypto/`:
 
 1. Ed25519 verify (license checkout signature check) — CryptoKit `Curve25519.Signing`.
-2. AES-256-GCM open (license file decrypt) — CryptoKit `AES.GCM`.
-3. HKDF-SHA256 derive (machine file decrypt key derivation) — CryptoKit `HKDF<SHA256>`.
+2. AES-256-GCM open (license/machine file decrypt) — CryptoKit `AES.GCM`.
+3. HKDF-SHA256 derive (both file types' decrypt key derivation, with different salt/info per
+   type — see the GOTCHAS section) — CryptoKit `HKDF<SHA256>`.
 4. Multi-scheme verify — Ed25519/RSA-PKCS1/RSA-PSS/ECDSA-P256 (machine checkout) and RSA-PKCS1v15
    (offline proof) — CryptoKit `P256.Signing` for ECDSA, the **Security framework**'s `SecKey` API
    for RSA (CryptoKit deliberately does not expose RSA; confirmed against Apple's own docs before
@@ -54,9 +57,9 @@ bug class a cross-repo security audit of this SDK family found live in
 check. Do not remove this guard to "simplify" the type; see `EcdsaTests.swift`'s regression test for
 what it protects against.
 
-**Everything else is hand-rolled, idiomatic Swift.** HTTP transport is built on `URLSession`
-directly — no crypto library is used for networking, JSON:API decoding, or the public client API
-surface.
+**Everything else is hand-rolled, idiomatic Swift.** HTTP transport, when it lands, goes on
+`URLSession` directly — no crypto library is used for networking, JSON:API decoding, or the public
+client API surface.
 
 ## Why native, not bound to tamga-c
 
@@ -95,7 +98,7 @@ tamga-swift/
 │   │   ├── Errors.swift          — TamgaCheckoutError (real); TamgaError HTTP error model (stub)
 │   │   ├── Proof.swift           — MachineProof: offline proof parse/verify
 │   │   ├── CanonicalJson.swift   — recursive alphabetical-key-sorted JSON writer, for Proof
-│   │   ├── Crypto/                — Ed25519, AesGcm, Hkdf, Ecdsa, Rsa, NaiveKey, DER — see "Crypto Architecture" above
+│   │   ├── Crypto/                — Ed25519, AesGcm, Hkdf, Ecdsa, Rsa, DER — see "Crypto Architecture" above
 │   │   ├── Models/                — License, Machine, LicenseScheme (real); ValidationCode, full Policy (stub)
 │   │   └── Checkout/               — LicenseFile, MachineFile, PemEnvelope (PEM parse/verify/decrypt)
 │   └── TamgaObjC/                — thin Objective-C interop wrapper over Tamga
@@ -148,10 +151,12 @@ source doc for the full set, including analytics/EE items that don't touch this 
   `VERSION_SCOPE_MISMATCH`, and `NOT_FOUND` which surfaces as an HTTP 404 instead of this code).
   Same applies to `ValidationScope`'s `entitlements`/`fingerprint`/`version`/`checksum` fields —
   build the request field, don't advertise it as a functioning constraint.
-- **No client-side 429/backoff handling.** `429 TOO_MANY_REQUESTS` is declared in the server's
-  error enum but has no constructor and is never returned by any code path today. Do not add
-  retry/backoff logic that waits for a 429 that will never come — it will just make the SDK feel
-  broken when a real rate limiter is eventually added server-side with different semantics.
+- **429 handling is required once the transport lands.** `429 TOO_MANY_REQUESTS` is live
+  server-side. The contract the other SDKs already ship, and the one this SDK's `Transport` must
+  match: parse `Retry-After` and cap it, back off with jittered exponential delays, and scope
+  auto-retry to `GET` plus five safe `POST` actions (`validate`, `validate-key`, `check-in`,
+  `check-out`, `ping`). Creates are deliberately excluded — retrying one risks a duplicate
+  resource.
 - **`Tamga-Environment` request header does nothing server-side.** It's a planned EE feature with
   no request-parsing code path yet. Don't expose a client-facing "environment" request option that
   implies it's honored today.
@@ -165,14 +170,22 @@ source doc for the full set, including analytics/EE items that don't touch this 
   600s regardless of `policy.heartbeat_duration`; process heartbeat window is a hardcoded 30s with
   no resurrection grace period at all. Any heartbeat-scheduler helper in this SDK should derive its
   ping interval from these hardcoded constants, not from a policy value that the server ignores.
-- **License checkout's AES key derivation is NOT a KDF.** It's the raw UTF-8 bytes of the license
-  key, zero-padded or truncated to exactly 32 bytes. Running it through SHA-256 or any real KDF
-  produces a key that silently fails to decrypt — this has bitten every SDK that assumed "hash the
-  secret" was a safe default. Machine checkout, by contrast, *does* use a real HKDF-SHA256 — don't
-  let the two crypto paths bleed into each other.
+- **Both file types derive their AES key with HKDF-SHA256, but never with the same parameters.**
+  License file: `salt = "tamga:license-file-key-v1"`, `ikm = <license key>`,
+  `info = "license-file"`. Machine file: `salt = "tamga:machine-file-key-v1"`,
+  `ikm = <license key>`, `info = <fingerprint>`. Both live in `Crypto/Hkdf.swift`; don't let the
+  two paths bleed into each other, and don't reintroduce the pre-v2 license-file transform (raw
+  key bytes zero-padded to 32). That transform and the `NaiveKey` type implementing it were
+  deleted, not deprecated, so no caller can silently opt back into the weaker derivation.
+- **Offline license files are format v2 only.** `alg` must be `base64+ed25519+v2` or
+  `aes-256-gcm+ed25519+v2`, the payload must carry signed `meta` claims (`iat`/`exp`/`jti`/`kid`),
+  and `exp` is enforced with a 60-second clock-skew tolerance
+  (`LicenseFile.clockSkewToleranceSeconds`). v1 files are rejected outright with no fallback — a
+  real behavioural break for anyone holding a v1 `.lic`, and the reason v2 exists: in v1 the
+  expiry lived only in the envelope, so a trial file was cryptographically valid forever.
 - **The license-checkout Ed25519 signature covers the base64 *string bytes* of `enc`, not its
   decoded bytes.** This is the single most common implementation bug across every Tamga SDK. See
-  the `// CRITICAL:` comment in `Sources/Tamga/Checkout/LicenseFile.swift` once it's implemented.
+  the `// CRITICAL:` comment in `Sources/Tamga/Checkout/LicenseFile.swift`.
 
 ## Testing
 

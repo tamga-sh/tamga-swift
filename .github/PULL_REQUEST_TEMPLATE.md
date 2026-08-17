@@ -7,7 +7,7 @@
 - [ ] `swiftlint lint --strict` passes
 - [ ] `swift test --enable-code-coverage` passes with the 80% line coverage gate
 - [ ] Commit messages follow [Conventional Commits](https://www.conventionalcommits.org/)
-- [ ] If this touches `/Sources/Tamga/FFI/`, `/Sources/Tamga/Checkout/`, `/Sources/Tamga/Proof.swift`: a `security-reviewer` pass was requested and CRITICAL/HIGH findings addressed
+- [ ] If this touches `/Sources/Tamga/Crypto/`, `/Sources/Tamga/Checkout/`, `/Sources/Tamga/Proof.swift`: a `security-reviewer` pass was requested and CRITICAL/HIGH findings addressed
 
 ## Test plan
 
