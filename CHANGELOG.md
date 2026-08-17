@@ -26,7 +26,7 @@
 * implement native crypto primitives (Ed25519, AES-GCM, HKDF, ECDSA, RSA, NaiveKey) ([d13b8e8](https://github.com/tamga-sh/tamga-swift/commit/d13b8e877d4abc51a3d0cf43570aae556c358df4))
 * implement offline proof + canonical JSON (MachineProof, CanonicalJson) ([02faecf](https://github.com/tamga-sh/tamga-swift/commit/02faecfa92a5d344281d6488c7dd2aa9b09b0e21))
 * pivot from tamga-c FFI binding to native Swift crypto reimplementation ([c8c14bb](https://github.com/tamga-sh/tamga-swift/commit/c8c14bb554e66fd8807ba41de6e0af4ed3953944))
-* scaffold project structure (Section A) ([d97f0f7](https://github.com/tamga-sh/tamga-swift/commit/d97f0f766ac199fea205b5f21e825f64cb5db277))
+* scaffold project structure ([d97f0f7](https://github.com/tamga-sh/tamga-swift/commit/d97f0f766ac199fea205b5f21e825f64cb5db277))
 
 
 ### Bug Fixes

@@ -8,12 +8,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 activation and offline verification for macOS and iOS apps. It reimplements Tamga's cryptographic
 verification logic natively in Swift (CryptoKit + the Security framework) — the same architecture as
 `tamga-python`/`tamga-go`/`tamga-js`/`tamga-dotnet` — so divergence from the Rust reference
-implementation in the crypto sections is a real interop bug, not a style choice. The full task
-breakdown lives in `docs/plans/tamga-swift.plan.md` in the sibling `tamga-sdk` working tree, one
-directory up — it is not part of this repository, so do not link to it from anything a consumer
-reads. The protocol/feature spec this SDK is built against — every field name, endpoint, and enum
-value comes from it — is the server-side `docs/sdk.md`, which lives in a private repository;
-public-facing docs must point at <https://tamga.sh> instead.
+implementation in the crypto sections is a real interop bug, not a style choice. The
+protocol/feature spec this SDK is built against — every field name, endpoint, and enum value comes
+from it — is the Tamga API protocol specification, which is not published; public-facing docs must
+point at <https://tamga.sh> instead.
 
 **Current state: crypto/checkout/proof are real; HTTP client surface is still stub.**
 `Sources/Tamga/Crypto/` (Ed25519, AES-256-GCM, HKDF-SHA256, ECDSA-P256, RSA PKCS1/PSS, DER),
@@ -122,20 +120,20 @@ swiftlint lint --strict    # As CI runs it — warnings fail under --strict
 swift format .             # If/when swift-format is adopted (not yet wired)
 ```
 
-There is no `just`-style task runner in this repo (unlike `tamga-api`) — SPM's own subcommands
-are the whole toolchain. `Scripts/check-coverage.sh` is not meant to be run standalone during
-normal dev; it expects `llvm-cov export -summary-only` JSON piped in, exactly as CI invokes it.
+There is no `just`-style task runner in this repo — SPM's own subcommands are the whole toolchain.
+`Scripts/check-coverage.sh` is not meant to be run standalone during normal dev; it expects
+`llvm-cov export -summary-only` JSON piped in, exactly as CI invokes it.
 
 **First-time setup**: none needed beyond a normal Swift toolchain. `swift build`/`swift test` work
 immediately on a fresh checkout — no sibling repo, no binary target, no local-dev override to apply.
 
-## GOTCHAS — from `docs/sdk.md`'s "Known Server-Side Gaps"
+## GOTCHAS — from the Tamga API protocol specification's "Known Server-Side Gaps"
 
 These are real, verified discrepancies between what the server *appears* to support and what it
 actually does. Building this SDK's UX around the wrong side of any of these will either silently
 no-op or advertise a guarantee the server doesn't enforce. Only the gaps relevant to this SDK's
-scope (license validation, checkout, machine management, offline proof) are listed — see the
-source doc for the full set, including analytics/EE items that don't touch this SDK at all.
+scope (license validation, checkout, machine management, offline proof) are listed — the
+specification covers the full set, including analytics/EE items that don't touch this SDK at all.
 
 - **Auto-update/release-checking is explicitly out of scope for v1.** `GET
   /releases/actions/upgrade` crashes at runtime server-side (queries a `release_artifacts` table
