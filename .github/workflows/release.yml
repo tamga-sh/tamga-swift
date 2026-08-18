@@ -32,6 +32,20 @@ jobs:
     name: release-please
     runs-on: ubuntu-latest
     steps:
+      # The default GITHUB_TOKEN cannot be used here. GitHub deliberately
+      # refuses to trigger workflows from events authored by GITHUB_TOKEN
+      # (loop prevention), so a release PR opened with it never gets a CI
+      # run -- and main's branch protection then blocks it forever on
+      # required checks that can't ever report. A short-lived GitHub App
+      # installation token is a distinct actor, so its PRs do trigger
+      # workflows and the required checks actually run.
+      - uses: actions/create-github-app-token@v2
+        id: app-token
+        with:
+          app-id: ${{ vars.RELEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+
       - uses: googleapis/release-please-action@v4
         with:
+          token: ${{ steps.app-token.outputs.token }}
           release-type: simple
