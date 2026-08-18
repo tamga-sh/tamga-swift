@@ -16,7 +16,7 @@ jobs:
     runs-on: macos-15
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # macOS runner images ship Xcode already -- no separate setup action
       # is needed to install it. We still pin the exact version so a runner
@@ -56,7 +56,7 @@ jobs:
     runs-on: macos-15
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # Pinned to 16.4, not an earlier version: confirmed directly (see
       # "Create an iOS Simulator device" below) that not every Xcode
