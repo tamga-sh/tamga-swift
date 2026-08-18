@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.1.2](https://github.com/tamga-sh/tamga-swift/compare/v1.1.1...v1.1.2) (2026-08-18)
+
+
+### Bug Fixes
+
+* **ci:** open release PRs with a GitHub App token so required checks run ([#13](https://github.com/tamga-sh/tamga-swift/issues/13)) ([4e0e6ab](https://github.com/tamga-sh/tamga-swift/commit/4e0e6ab7da7ee94b9e58ff01b68703be9d796905))
+
 ## [1.1.1](https://github.com/tamga-sh/tamga-swift/compare/v1.1.0...v1.1.1) (2026-08-18)
 
 
