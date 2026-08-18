@@ -31,6 +31,7 @@ jobs:
   release-please:
     name: release-please
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       # The default GITHUB_TOKEN cannot be used here. GitHub deliberately
       # refuses to trigger workflows from events authored by GITHUB_TOKEN
@@ -41,6 +42,7 @@ jobs:
       # workflows and the required checks actually run.
       - uses: actions/create-github-app-token@v2
         id: app-token
+        timeout-minutes: 10
         with:
           app-id: ${{ vars.RELEASE_APP_ID }}
           private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
