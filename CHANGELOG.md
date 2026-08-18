@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.1.1](https://github.com/tamga-sh/tamga-swift/compare/v1.1.0...v1.1.1) (2026-08-18)
+
+
+### Bug Fixes
+
+* correct SDK documentation and align package metadata ([2a020be](https://github.com/tamga-sh/tamga-swift/commit/2a020be079999989598dd63f95c26a4ec39d4fc6))
+
 ## [1.1.0](https://github.com/tamga-sh/tamga-swift/compare/v1.0.0...v1.1.0) (2026-08-13)
 
 
