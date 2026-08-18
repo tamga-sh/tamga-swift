@@ -28,7 +28,7 @@ public enum LicenseScheme: String, Equatable, Sendable {
 
 /// STUB -- scaffolding only beyond `LicenseScheme` above.
 ///
-/// Intended contents once implemented (see docs/sdk.md §10):
+/// Intended contents once implemented:
 ///
 /// - `Policy`: full attribute set (`max_machines`, `max_cores`,
 ///   `max_processes`, `max_uses`, `require_check_in`, `heartbeat_duration`,
@@ -58,7 +58,7 @@ public enum LicenseScheme: String, Equatable, Sendable {
 ///     - `checkInInterval`: lowercase (inconsistent with the SCREAMING_SNAKE
 ///       enums above) -- `"day"` / `"week"` / `"month"` / `"year"`.
 ///
-/// CRITICAL TRAP (see docs/sdk.md's "Known Server-Side Gaps" item 9):
+/// CRITICAL TRAP:
 /// freshly-created policies default `overage_strategy` to the literal string
 /// `"DENY_ACCESS"` and `heartbeat_resurrection_strategy` to
 /// `"NO_RESURRECTION"` -- NEITHER is a real enum variant. The server silently
@@ -70,6 +70,5 @@ public enum LicenseScheme: String, Equatable, Sendable {
 public enum Policy {
     // Intentionally empty beyond LicenseScheme above, which the checkout
     // architecture pivot needed for MachineFile's scheme dispatch.
-    // Implementation deferred to a future session per
-    // docs/plans/tamga-swift.plan.md Sections D, H, and L.
+    // Implementation deferred to a future release.
 }

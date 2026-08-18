@@ -3,7 +3,7 @@ import Foundation
 /// A machine's heartbeat state. GOTCHA: the 600s (10 min) heartbeat window is
 /// hardcoded server-side, NOT driven by `policy.heartbeat_duration` -- a
 /// future heartbeat-scheduler helper must not derive its ping interval from
-/// that field (see `docs/sdk.md`'s "Known Server-Side Gaps" item 8).
+/// that field.
 public enum HeartbeatStatus: String, Equatable, Sendable {
     /// Wire value `NOT_STARTED` -- never pinged.
     case notStarted = "NOT_STARTED"
@@ -27,7 +27,7 @@ public enum HeartbeatStatus: String, Equatable, Sendable {
 /// `.machine` file's embedded resource (`Checkout/MachineFile.swift`) --
 /// the full `TamgaClient`-facing machine-management surface (create/update/
 /// heartbeat-ping endpoints, `HeartbeatScheduler`) is still deferred to a
-/// future session per `docs/plans/tamga-swift.plan.md` Section H.
+/// future release.
 public struct Machine: Equatable, Sendable {
     /// The machine's unique ID.
     public let id: String

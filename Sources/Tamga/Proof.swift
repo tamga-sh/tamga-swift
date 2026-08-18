@@ -1,16 +1,15 @@
 import Foundation
 
-/// Machine offline proof (air-gapped verification) -- docs/sdk.md §7.
+/// Machine offline proof (air-gapped verification).
 ///
 /// **Scope note**: `generateOfflineProof` (the `POST
 /// /machines/{id}/actions/generate-offline-proof` HTTP call itself) is part
 /// of `TamgaClient`'s HTTP-facing surface and stays deferred to a future
-/// session per `docs/plans/tamga-swift.plan.md` Section I, same as the rest
-/// of that surface (see `Errors.swift`/`License.swift`/`Machine.swift`'s
-/// scope notes). `MachineProof` below covers the proof-STRING
-/// parsing/verification this architecture pivot needed: the canonical-JSON
-/// signed-payload construction and RSA-2048 PKCS#1 v1.5/SHA-256 signature
-/// check.
+/// release, same as the rest of that surface (see
+/// `Errors.swift`/`License.swift`/`Machine.swift`'s scope notes).
+/// `MachineProof` below covers proof-STRING parsing and verification: the
+/// canonical-JSON signed-payload construction and the RSA-2048 PKCS#1
+/// v1.5/SHA-256 signature check.
 ///
 /// Builds the byte-exact canonical JSON payload an offline proof's RSA
 /// signature covers, and parses/verifies a `meta.proof` string returned by
@@ -24,16 +23,16 @@ import Foundation
 /// the version prefix from the signature and rejects malformed/missing-prefix
 /// strings.
 ///
-/// CRITICAL -- canonical payload field order: the signed payload is
-/// `{"account":{"id":...},"machine":{"id":...,"fingerprint":...},"dataset":...}`
-/// in literal source-code order is WRONG -- confirmed against tamga-dotnet's
-/// own equivalent (which corrected this after reading the actual server
-/// source, `tamga-api/src/features/machines/generate_offline_proof.rs`): the
-/// server builds this payload via `serde_json::json!(...)`, whose backing
-/// `serde_json::Map` is `BTreeMap`-backed (the `preserve_order`/`indexmap`
-/// Cargo feature is enabled on neither `tamga-api` nor `tamga-rust`), so the
-/// actual wire bytes are recursively **alphabetically key-sorted at every
-/// nesting level**, not literal source order:
+/// CRITICAL -- canonical payload field order: writing the signed payload in
+/// literal source order, as
+/// `{"account":{"id":...},"machine":{"id":...,"fingerprint":...},"dataset":...}`,
+/// is WRONG. Confirmed against tamga-dotnet's own equivalent, which corrected
+/// this after reading the server's offline-proof handler: the server builds
+/// the payload with `serde_json::json!(...)`, whose backing `serde_json::Map`
+/// is `BTreeMap`-backed (neither the server nor `tamga-rust` enables the
+/// `preserve_order`/`indexmap` Cargo feature), so the actual wire bytes are
+/// recursively **alphabetically key-sorted at every nesting level**, not in
+/// literal source order:
 /// `{"account":{"id":...},"dataset":{...sorted...},"machine":{"fingerprint":...,"id":...}}`
 /// -- note `dataset` sorts before `machine`, and inside `machine`,
 /// `fingerprint` sorts before `id`. This applies recursively to whatever keys

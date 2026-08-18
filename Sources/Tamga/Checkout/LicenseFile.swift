@@ -39,12 +39,13 @@ struct LicenseFileCertificate: Decodable {
 ///
 /// GOTCHA: `includes` is always `[]` server-side -- this SDK does not model
 /// an "embedded relationships via checkout" feature. GOTCHA: checkout `id`
-/// is a fresh UUIDv7 per call, not idempotent. GOTCHA: `ttl`/`expiry`
-/// (returned alongside the certificate by the JSON:API checkout response,
-/// not carried inside the file itself) are metadata-only, NOT embedded in
-/// the signed payload and NOT re-checked server-side on later validation --
-/// expiry enforcement for an offline file is entirely this SDK's
-/// client-side responsibility.
+/// is a fresh UUIDv7 per call, not idempotent. GOTCHA: the `ttl`/`expiry`
+/// fields on the JSON:API checkout response *envelope* are metadata only --
+/// whoever holds the file can drop the envelope, and the server does not
+/// re-check them on later validation. The expiry that matters is the signed
+/// `exp` claim inside the file (`LicenseFileClaims`), which format v2 added
+/// and `verifyWithClaims(publicKey:licenseKey:now:)` enforces; enforcing it
+/// is entirely this SDK's client-side responsibility.
 public struct LicenseFile: Sendable {
     private static let beginMarker = "-----BEGIN LICENSE FILE-----"
     private static let endMarker = "-----END LICENSE FILE-----"
@@ -111,13 +112,19 @@ public struct LicenseFile: Sendable {
 
     /// Full verify pipeline: verifies the Ed25519 signature (fails closed),
     /// then decrypts (if `alg` indicates AES-256-GCM) or plain-decodes the
-    /// `enc` payload, and parses the embedded `{"data": <LicenseResource>}`
-    /// JSON into a `License`.
+    /// `enc` payload, parses the embedded `{"data": <LicenseResource>}` JSON
+    /// into a `License`, and enforces the signed `exp` claim against the
+    /// system clock. Use `verifyWithClaims(publicKey:licenseKey:now:)` to
+    /// supply a trusted timestamp instead, or to read the claims back.
     ///
     /// - Parameter licenseKey: used to derive the AES-256-GCM key (via
-    ///   `Hkdf`) for an encrypted file. Ignored for a plain (unencrypted)
-    ///   file, but still required by this method's signature for a uniform
-    ///   call shape across both cases.
+    ///   `Hkdf.deriveLicenseFileKey`) for an encrypted file. Ignored for a
+    ///   plain (unencrypted) file, but still required by this method's
+    ///   signature for a uniform call shape across both cases.
+    /// - Throws: `TamgaCheckoutError.signatureVerificationFailed`,
+    ///   `.expired(_:)`, `.decryptionFailed(_:)`, `.unsupportedAlgorithm(_:)`
+    ///   or `.offlineFileFormat(_:)` -- never a successfully-returned
+    ///   unverified `License`.
     public func verifyAndDecrypt(publicKey: Data, licenseKey: String) throws -> License {
         try verifyWithClaims(
             publicKey: publicKey,

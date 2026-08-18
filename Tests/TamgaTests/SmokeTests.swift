@@ -10,12 +10,11 @@ import Testing
 // (2026-08-12), the package graph is just Tamga -> TamgaObjC/TamgaTests --
 // no binary target, no C shim.
 //
-// Real coverage lands per-section as each part of
-// docs/plans/tamga-swift.plan.md is implemented -- see the Tests/TamgaTests/
-// tree in the plan's Section A file list for the full intended layout
-// (TransportAuthTests, LicenseValidationTests, CheckInTests,
-// MachineManagementTests, ComponentTests, ProcessTests, EntitlementTests,
-// plus Crypto/, Checkout/, Models/, and Support/ subdirectories).
+// Real coverage lands area by area as each part of the SDK is implemented.
+// The full intended layout of this tree is TransportAuthTests,
+// LicenseValidationTests, CheckInTests, MachineManagementTests,
+// ComponentTests, ProcessTests, EntitlementTests, plus Crypto/, Checkout/,
+// Models/, and Support/ subdirectories.
 
 @Suite("Smoke")
 struct SmokeTests {

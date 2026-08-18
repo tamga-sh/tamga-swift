@@ -34,9 +34,9 @@ opt_in_rules:
 
 disabled_rules:
   # This is a stub-heavy scaffold right now (doc-comment-only files with
-  # empty enum bodies) -- todo/fixme markers are expected in the plan's
-  # remaining sections and should not fail lint until real implementation
-  # work replaces them.
+  # empty enum bodies) -- todo/fixme markers are expected in the not-yet-
+  # implemented parts of the SDK and should not fail lint until real
+  # implementation work replaces them.
   - todo
 
 line_length:

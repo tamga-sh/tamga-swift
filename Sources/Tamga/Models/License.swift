@@ -9,8 +9,7 @@ import Foundation
 /// -- entitlement caching (`hasEntitlement(code:)`), relationship IDs
 /// (product/policy/user/environment), and the full `TamgaClient`-facing
 /// validate-by-key/validate-by-ID response shapes are still deferred to a
-/// future session per `docs/plans/tamga-swift.plan.md` Sections D and K, same
-/// as before this file had any real implementation.
+/// future release.
 public struct License: Equatable, Sendable {
     /// The license's unique identifier.
     public let id: String

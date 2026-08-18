@@ -3,9 +3,9 @@ import Foundation
 
 /// AES-256-GCM open/seal wrapper over CryptoKit's `AES.GCM` (native since
 /// iOS 13 / macOS 10.15, no third-party dependency). Algorithm-only: never
-/// derives the AES key itself -- see `Hkdf` for both derivations and
-/// `Hkdf` (machine checkout) for the two distinct, non-interchangeable
-/// key-derivation paths that feed this type.
+/// derives the AES key itself -- `Hkdf` owns both of the distinct,
+/// non-interchangeable derivations that feed this type
+/// (`deriveLicenseFileKey` and `deriveMachineFileKey`).
 enum AesGcmCipher {
     /// Standard AES-GCM nonce length in bytes.
     static let nonceLength = 12

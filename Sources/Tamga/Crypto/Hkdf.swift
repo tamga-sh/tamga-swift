@@ -1,17 +1,18 @@
 import CryptoKit
 import Foundation
 
-/// HKDF-SHA256 wrapper (RFC 5869) via CryptoKit's `HKDF<SHA256>` (native
-/// since iOS 13 / macOS 10.15, no third-party dependency). Machine
-/// checkout's real, properly-derived encryption key: 32 bytes from
-/// `salt = "tamga:machine-file-key-v1"`, `ikm = <license key>`,
-/// `info = <machine fingerprint>`.
+/// HKDF-SHA256 (RFC 5869) via CryptoKit's `HKDF<SHA256>` (native since
+/// iOS 13 / macOS 10.15, no third-party dependency). Both offline file formats
+/// derive their 32-byte AES-256 key here as of format v2, with different
+/// parameters per file type -- do not conflate the two paths:
 ///
-/// Both offline file formats derive their AES key here as of format v2, but
-/// with different parameters -- do not conflate the two paths. Machine file
-/// decryption requires BOTH the license key AND the target machine's
-/// fingerprint, so a machine file cannot be opened anywhere but on the machine
-/// it was issued for; a license file is not bound to a machine.
+/// - Machine file: `salt = "tamga:machine-file-key-v1"`, `ikm = <license key>`,
+///   `info = <machine fingerprint>`. Needs BOTH the license key AND the target
+///   machine's fingerprint, so a machine file cannot be opened anywhere but on
+///   the machine it was issued for.
+/// - License file: `salt = "tamga:license-file-key-v1"`, `ikm = <license key>`,
+///   `info = "license-file"`. No fingerprint -- a license file is not bound to
+///   a machine.
 ///
 /// Before v2 the license-file key was not derived at all: it was the license
 /// key's raw UTF-8 bytes zero-padded to 32, which meant an attacker holding a

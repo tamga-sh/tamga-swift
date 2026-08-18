@@ -32,16 +32,19 @@
 ///   returns plain `application/json` with a flat `{ ts, valid, detail, code }`
 ///   body and no `data` envelope -- this one endpoint needs special-cased
 ///   response parsing.
-/// - Explicitly NOT implemented (doc-only, matching docs/sdk.md's
-///   "Known Server-Side Gaps"): the `Tamga-Environment` request header (planned
-///   EE feature, no server code path reads it yet), and `X-RateLimit-*`
-///   response header handling / 429 backoff (declared but never set/returned
-///   by any server code path today).
+/// - Rate-limit handling, which is required rather than optional: HTTP 429 is
+///   live server-side. Parse `Retry-After` and cap it, back off with jittered
+///   exponential delays, and scope auto-retry to `GET` plus the five safe
+///   `POST` actions (`validate`, `validate-key`, `check-in`, `check-out`,
+///   `ping`). Creates are deliberately excluded -- retrying one risks a
+///   duplicate resource.
+/// - Explicitly NOT implemented (doc-only, matching the server's own known
+///   gaps): the `Tamga-Environment` request header -- a planned EE feature no
+///   server code path reads yet.
 /// - Per Swift 6.2 Approachable Concurrency (`ecc:swift-concurrency-6-2`): this
 ///   type is main-actor by default; the actual request execution should be
 ///   explicitly `@concurrent`-annotated background work, not implicit
 ///   background hopping.
 public enum Transport {
-    // Intentionally empty. Implementation deferred to a future session per
-    // docs/plans/tamga-swift.plan.md Section C.
+    // Intentionally empty. Implementation deferred to a future release.
 }

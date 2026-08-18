@@ -4,7 +4,7 @@
 * @tamga-sh/sdk-maintainers
 
 # Crypto-bearing paths require a security-focused reviewer on every change.
-/Sources/Tamga/FFI/    @tamga-sh/sdk-maintainers @tamga-sh/security
+/Sources/Tamga/Crypto/    @tamga-sh/sdk-maintainers @tamga-sh/security
 /Sources/Tamga/Checkout/    @tamga-sh/sdk-maintainers @tamga-sh/security
 /Sources/Tamga/Proof.swift    @tamga-sh/sdk-maintainers @tamga-sh/security
 
