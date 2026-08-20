@@ -1,4 +1,4 @@
-import CryptoKit
+import Crypto
 import Foundation
 import Testing
 
@@ -13,7 +13,7 @@ struct EcdsaTests {
         let signature = try key.signature(for: message)
 
         let derKey = key.publicKey.derRepresentation
-        #expect(Ecdsa.verify(publicKeyDER: derKey, message: message, signature: signature.rawRepresentation))
+        #expect(Ecdsa.verify(publicKeyDER: derKey, message: message, signature: signature.derRepresentation))
     }
 
     @Test("verify returns false for a tampered message")
@@ -23,7 +23,7 @@ struct EcdsaTests {
 
         let derKey = key.publicKey.derRepresentation
         let tampered = Data("tampered".utf8)
-        #expect(!Ecdsa.verify(publicKeyDER: derKey, message: tampered, signature: signature.rawRepresentation))
+        #expect(!Ecdsa.verify(publicKeyDER: derKey, message: tampered, signature: signature.derRepresentation))
     }
 
     @Test("verify returns false for a genuinely different curve's key and signature (P-384)")
@@ -38,7 +38,7 @@ struct EcdsaTests {
         let signature = try key.signature(for: message)
 
         let derKey = key.publicKey.derRepresentation
-        #expect(!Ecdsa.verify(publicKeyDER: derKey, message: message, signature: signature.rawRepresentation))
+        #expect(!Ecdsa.verify(publicKeyDER: derKey, message: message, signature: signature.derRepresentation))
     }
 
     /// Regression test for the curve-confusion bug class this SDK family's
@@ -61,7 +61,7 @@ struct EcdsaTests {
     func verifyReturnsFalseForMismatchedCurveOIDWithMatchingCoordinateLength() throws {
         let key = P256.Signing.PrivateKey()
         let message = Data("tamga-swift ecdsa curve-confusion regression test".utf8)
-        let rawSignature = try key.signature(for: message).rawRepresentation
+        let derSignature = try key.signature(for: message).derRepresentation
 
         let point = key.publicKey.x963Representation // 65 bytes: 0x04 || X(32) || Y(32)
         #expect(point.count == 65)
@@ -82,7 +82,7 @@ struct EcdsaTests {
         mislabeledSPKI.append(contentsOf: algorithmIdentifier)
         mislabeledSPKI.append(contentsOf: bitString)
 
-        #expect(!Ecdsa.verify(publicKeyDER: Data(mislabeledSPKI), message: message, signature: rawSignature))
+        #expect(!Ecdsa.verify(publicKeyDER: Data(mislabeledSPKI), message: message, signature: derSignature))
     }
 
     @Test("verify returns false, not a crash, for a malformed public key")
@@ -92,10 +92,32 @@ struct EcdsaTests {
         #expect(!Ecdsa.verify(publicKeyDER: malformed, message: Data("payload".utf8), signature: signature))
     }
 
+    @Test("verify rejects a raw (r, s) P1363 signature, which is not the wire format")
+    func verifyRejectsRawSignatureEncoding() throws {
+        // Regression for a real defect: this verifier previously parsed the signature as
+        // `rawRepresentation`, so it accepted P1363 and rejected the DER the server actually
+        // sends -- meaning every genuine ECDSA machine file failed to verify. A raw signature is
+        // exactly 64 bytes; a DER one is ~70-72 and starts with 0x30. Confirmed against a real
+        // checked-out fixture in tamga-go/testdata: 71 bytes, first byte 0x30.
+        let key = P256.Signing.PrivateKey()
+        let message = Data("payload".utf8)
+        let signature = try key.signature(for: message)
+
+        #expect(signature.rawRepresentation.count == 64)
+        #expect(signature.derRepresentation.first == 0x30)
+
+        #expect(Ecdsa.verify(publicKeyDER: key.publicKey.derRepresentation,
+                             message: message,
+                             signature: signature.derRepresentation))
+        #expect(!Ecdsa.verify(publicKeyDER: key.publicKey.derRepresentation,
+                              message: message,
+                              signature: signature.rawRepresentation))
+    }
+
     @Test("verify returns false, not a crash, for a wrong-length signature")
     func verifyReturnsFalseForWrongLengthSignature() {
         let key = P256.Signing.PrivateKey()
-        let tooShort = Data([0x01, 0x02, 0x03]) // P-256 IEEE P1363 signatures are always 64 bytes
+        let tooShort = Data([0x01, 0x02, 0x03]) // far too short to be a DER SEQUENCE
         let derKey = key.publicKey.derRepresentation
 
         #expect(!Ecdsa.verify(publicKeyDER: derKey, message: Data("payload".utf8), signature: tooShort))

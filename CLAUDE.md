@@ -5,23 +5,25 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Project
 
 `tamga-swift` is the official Swift SDK for Tamga, with Objective-C interoperability — license
-activation and offline verification for macOS and iOS apps. It reimplements Tamga's cryptographic
-verification logic natively in Swift (CryptoKit + the Security framework) — the same architecture as
+activation and offline verification for macOS, iOS and Linux. It reimplements Tamga's cryptographic
+verification logic natively in Swift (apple/swift-crypto) — the same architecture as
 `tamga-python`/`tamga-go`/`tamga-js`/`tamga-dotnet` — so divergence from the Rust reference
 implementation in the crypto sections is a real interop bug, not a style choice. The
 protocol/feature spec this SDK is built against — every field name, endpoint, and enum value comes
 from it — is the Tamga API protocol specification, which is not published; public-facing docs must
 point at <https://tamga.sh> instead.
 
-**Current state: crypto/checkout/proof are real; HTTP client surface is still stub.**
-`Sources/Tamga/Crypto/` (Ed25519, AES-256-GCM, HKDF-SHA256, ECDSA-P256, RSA PKCS1/PSS, DER),
-`Checkout/` (`LicenseFile`, `MachineFile`), and `Proof.swift`
-(`MachineProof` + `CanonicalJson`) are implemented and tested (118 tests; CI gates 80% line
-coverage and the suite currently sits well above it). The
-HTTP-facing surface (`TamgaClient`'s endpoint methods, `Transport.swift`, the full JSON:API error
-model, entitlement caching, heartbeat scheduling, the full `Policy` struct) is still stub — see each
-of those files' own doc comments for what's deferred. Do not assume any method on `TamgaClient`
-does anything yet.
+**Current state: complete.** `Sources/Tamga/Crypto/` (Ed25519, AES-256-GCM, HKDF-SHA256,
+ECDSA-P256, RSA PKCS1/PSS, DER), `Checkout/`, `Proof.swift`, and the HTTP surface
+(`TamgaClient`'s 20 endpoints, `Transport`, `AuthTransport`, the JSON:API error model,
+`EntitlementCache`, both heartbeat schedulers, and the full `Policy` struct) are all implemented
+and tested — 193 tests, ~84% line coverage against an 80% gate.
+
+The normative description of the network surface is `../docs/api-client-contract.md`, derived from
+`tamga-go`. Behavioural changes to `TamgaClient`/`Transport` should update that document too, or
+the fleet drifts apart again.
+
+**Three CI jobs must pass: macOS, iOS, and Linux.** The package is no longer Apple-only.
 
 Until 2026-08-12 this package instead bound to `tamga-c` (the Rust reference implementation) via a
 C FFI boundary and a `TamgaCore` binary target, mirroring `tamga-java`'s JNI approach — deliberately
@@ -34,14 +36,31 @@ Dependency Notes" used to describe is gone, not just out of date.
 The four crypto operations Tamga's protocol needs, and what backs each one in
 `Sources/Tamga/Crypto/`:
 
-1. Ed25519 verify (license checkout signature check) — CryptoKit `Curve25519.Signing`.
-2. AES-256-GCM open (license/machine file decrypt) — CryptoKit `AES.GCM`.
+1. Ed25519 verify (license checkout signature check) — `Crypto`'s `Curve25519.Signing`.
+2. AES-256-GCM open (license/machine file decrypt) — `Crypto`'s `AES.GCM`.
 3. HKDF-SHA256 derive (both file types' decrypt key derivation, with different salt/info per
-   type — see the GOTCHAS section) — CryptoKit `HKDF<SHA256>`.
+   type — see the GOTCHAS section) — `Crypto`'s `HKDF<SHA256>`.
 4. Multi-scheme verify — Ed25519/RSA-PKCS1/RSA-PSS/ECDSA-P256 (machine checkout) and RSA-PKCS1v15
-   (offline proof) — CryptoKit `P256.Signing` for ECDSA, the **Security framework**'s `SecKey` API
-   for RSA (CryptoKit deliberately does not expose RSA; confirmed against Apple's own docs before
-   writing `Crypto/Rsa.swift` — do not go looking for an RSA type in CryptoKit).
+   (offline proof) — `Crypto`'s `P256.Signing` for ECDSA, and `CryptoExtras`' `_RSA.Signing` for
+   RSA (neither CryptoKit nor swift-crypto's `Crypto` module exposes RSA — do not go looking).
+
+**Everything runs on apple/swift-crypto, not CryptoKit directly.** On Apple platforms the `Crypto`
+module forwards to CryptoKit, so this is a portable spelling of the same primitives rather than a
+different backend there. RSA is the exception: it was on the Security framework, which is
+Apple-only and made the package impossible to compile on Linux.
+
+**swift-crypto is pinned to 4.x, and the floor is not cosmetic.** The 3.x line has a memory-safety
+bug on the RSA public-key parse ERROR path: `_RSA.Signing.PublicKey(derRepresentation:)` corrupts
+the heap when the DER fails to parse. Reproduced against 3.15.1 with a standalone probe — 2000
+sequential malformed parses abort with `nanov2_guard_corruption_detected`, while valid parses never
+do. It surfaced here as a flaky `signal 6` in the test suite roughly 5 runs in 6, because
+`RsaTests` deliberately feeds `Rsa.verifyPkcs1` a malformed key. That path is reachable from
+production with attacker-supplied bytes. Do not relax the pin back to 3.x.
+
+**`Crypto/Ecdsa.swift` parses the signature as ASN.1 DER, not raw `(r, s)`.** The server signs with
+`ECDSA_P256_SHA256_ASN1`. Confirmed against a real checked-out fixture: 71 bytes beginning `0x30`,
+where a P1363 signature would be exactly 64 raw bytes. This previously used `rawRepresentation` and
+rejected every genuine server-issued ECDSA machine file.
 
 **`Crypto/Ecdsa.swift` has an explicit curve-OID check most callers would not expect to need.**
 Confirmed directly (empirically, not assumed): CryptoKit's
@@ -55,20 +74,21 @@ bug class a cross-repo security audit of this SDK family found live in
 check. Do not remove this guard to "simplify" the type; see `EcdsaTests.swift`'s regression test for
 what it protects against.
 
-**Everything else is hand-rolled, idiomatic Swift.** HTTP transport, when it lands, goes on
-`URLSession` directly — no crypto library is used for networking, JSON:API decoding, or the public
-client API surface.
+**Everything else is hand-rolled, idiomatic Swift.** HTTP transport goes on `URLSession` behind
+the `HTTPRequestPerforming` protocol — no crypto library is used for networking, JSON:API decoding,
+or the public client API surface.
 
 ## Why native, not bound to tamga-c
 
-`tamga-java` (JNI) still binds to `tamga-c`'s Rust reference implementation for these same 4
-operations; `tamga-swift` deliberately does not, as of 2026-08-12. Both are legitimate designs with
-a real tradeoff, not a strict improvement in one direction — this section exists so a future
-contributor doesn't "fix" one architecture into looking like the other without re-deriving why this
-one was chosen:
+Both `tamga-swift` and `tamga-java` originally planned to bind to `tamga-c`'s Rust reference
+implementation for these 4 operations, and **both pivoted to native reimplementation on
+2026-08-12** — this file previously claimed tamga-java still binds via JNI, which has not been true
+since that date (see `tamga-java/CLAUDE.md`'s "Why native, not bound to tamga-c"). Binding remains a
+legitimate design with a real tradeoff, so this section exists to record why it was dropped rather
+than let a future contributor "fix" one architecture back into the other:
 
-- **The original tamga-c-binding design's own stated rationale** (still true, still the reason
-  `tamga-java` keeps it): binding to one audited reference implementation avoids maintaining and
+- **The original tamga-c-binding design's own stated rationale** (still true in the abstract):
+  binding to one audited reference implementation avoids maintaining and
   security-auditing N independent reimplementations of the same signature/encryption logic. A
   cross-repo audit of this SDK family found that risk was NOT hypothetical: the same ECDSA
   curve-confusion bug (see above) was independently present in 3 of 5 from-scratch
@@ -91,19 +111,23 @@ tamga-swift/
 ├── Package.swift                — SPM manifest: 3 targets, no binary target
 ├── Sources/
 │   ├── Tamga/                    — public Swift API
-│   │   ├── TamgaClient.swift     — top-level client: config, all endpoint methods (stub)
-│   │   ├── Transport.swift       — URLSession-based HTTP layer, auth headers, content-type dispatch (stub)
-│   │   ├── Errors.swift          — TamgaCheckoutError (real); TamgaError HTTP error model (stub)
+│   │   ├── TamgaClient.swift     — top-level client, split across TamgaClient+*.swift extensions
+│   │   ├── Transport.swift       — HTTPRequestPerforming seam, URL/auth/headers, 429 retry
+│   │   ├── AuthTransport.swift   — the seven auth forms
+│   │   ├── EntitlementCache.swift, HeartbeatScheduler.swift — actors
+│   │   ├── Errors.swift          — TamgaError (API) and TamgaCheckoutError (offline)
 │   │   ├── Proof.swift           — MachineProof: offline proof parse/verify
 │   │   ├── CanonicalJson.swift   — recursive alphabetical-key-sorted JSON writer, for Proof
 │   │   ├── Crypto/                — Ed25519, AesGcm, Hkdf, Ecdsa, Rsa, DER — see "Crypto Architecture" above
-│   │   ├── Models/                — License, Machine, LicenseScheme (real); ValidationCode, full Policy (stub)
+│   │   ├── Models/                — License, Machine, Component, MachineProcess, Entitlement,
+│   │   │                             Policy, Scope, ValidationCode/Meta, Page, requests/results
 │   │   └── Checkout/               — LicenseFile, MachineFile, PemEnvelope (PEM parse/verify/decrypt)
 │   └── TamgaObjC/                — thin Objective-C interop wrapper over Tamga
 ├── Tests/TamgaTests/             — Swift Testing (import Testing, NOT XCTest)
 ├── Scripts/check-coverage.sh     — hand-written 80% line-coverage gate for CI
 └── .github/workflows/
-    ├── ci.yml                    — swiftlint + swift test (macOS) + xcodebuild test (iOS)
+    ├── ci.yml                    — swiftlint + swift test + coverage (macOS), xcodebuild test
+    │                                 (iOS), swift build/test (Linux, swift:6.1-jammy)
     └── release.yml               — release-please only; no binary-asset publish step (see that file's header comment)
 ```
 
@@ -194,15 +218,17 @@ specification covers the full set, including analytics/EE items that don't touch
   `xcrun llvm-cov export -summary-only` → `Scripts/check-coverage.sh`. Run the same pipeline
   locally before pushing if you're unsure a change clears the bar — see that script's header
   comment for the exact invocation.
-- Two CI jobs must both pass: `swift test` on macOS, `xcodebuild test` against a fresh iOS
-  Simulator device on iOS. The device is created at run time from whichever runtime matches the
+- Three CI jobs must all pass: `swift test` on macOS, `xcodebuild test` against a fresh iOS
+  Simulator device on iOS, and `swift build`/`swift test` in a `swift:6.1-jammy` container on
+  Linux. The device is created at run time from whichever runtime matches the
   pinned Xcode's own default Simulator SDK (see `ci.yml`'s "Create an iOS Simulator device" step) —
   not a hardcoded device name, which proved unreliable across GitHub's runner pool. The coverage
   gate lives only in the macOS job, not the iOS one — they're intentionally not double-gated on the
   same threshold.
-- Every `Tamga` type that touches the network must sit behind a protocol for test doubles (mock
-  `URLSession` via a `MockURLProtocol` harness) — see the `ecc:swift-protocol-di-testing` skill. Do
-  not hit live network from unit tests. There is no FFI boundary to mock anymore — `Crypto/` calls
+- Every `Tamga` type that touches the network sits behind the `HTTPRequestPerforming` protocol, and
+  tests inject `MockPerformer` (`Tests/TamgaTests/Support/`). Deliberately NOT a `MockURLProtocol`
+  harness: `URLProtocol` registration is unreliable on swift-corelibs-foundation and would make the
+  suite Apple-only. Do not hit live network from unit tests. There is no FFI boundary to mock anymore — `Crypto/` calls
   CryptoKit/Security directly, and its own tests use real (test-generated) keys and signatures
   rather than mocking the crypto itself; see `Tests/TamgaTests/Support/` for the shared fixture
   helpers (`RsaTestKey`, `CheckoutFixture`).
@@ -212,9 +238,18 @@ specification covers the full set, including analytics/EE items that don't touch
 - **SPM has no central package registry for this SDK** — unlike `tamga-python` (PyPI) or
   `tamga-js` (npm), there is no name-collision concern and no publish step. The git tag *is* the
   release; `release.yml` (release-please only) is the entire release surface.
-- **RSA is Security framework, not CryptoKit** — see "Crypto Architecture" above. This is the one
-  crypto primitive in this SDK that doesn't use CryptoKit; don't "simplify" `Crypto/Rsa.swift` by
-  looking for a CryptoKit RSA type that doesn't exist.
+- **RSA is `CryptoExtras`, not CryptoKit** — see "Crypto Architecture" above, including why the
+  swift-crypto 4.x floor is load-bearing. Don't "simplify" `Crypto/Rsa.swift` by looking for a
+  CryptoKit RSA type that doesn't exist.
+- **`MachineAttributes` must not declare explicit snake_case `CodingKeys`.** The shared decoder
+  applies `.convertFromSnakeCase`, so the two cancel: the strategy rewrites `heartbeat_status` to
+  `heartbeatStatus`, lookup compares that against a CodingKey whose stringValue is
+  `heartbeat_status`, matches nothing, and decodes nil. Every machine silently came back
+  `.notStarted` with null timestamps. See `MachineAttributesTests`.
+- **Path segments are percent-encoded by hand in `Transport`.** `URL.appendPathComponent` leaves
+  both slashes and dot-segments intact, so an id of `../../evil` reached a different endpoint.
+  Dots are unreserved, so escaping alone does not neutralize an all-dots segment; those get their
+  dots encoded explicitly.
 
 ## Branch & Commit Convention
 

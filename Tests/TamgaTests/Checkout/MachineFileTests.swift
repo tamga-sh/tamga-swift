@@ -1,4 +1,5 @@
-import CryptoKit
+import Crypto
+import CryptoExtras
 import Foundation
 import Testing
 
@@ -35,8 +36,8 @@ struct MachineFileTests {
         let pair = RsaTestKey.generate()
         let json = CheckoutFixture.machinePayloadJSON()
         let enc = CheckoutFixture.plainEnc(json: json)
-        let algorithm = SecKeyAlgorithm.rsaSignatureMessagePKCS1v15SHA256
-        let sig = CheckoutFixture.rsaSign(enc: enc, privateKey: pair.privateKey, algorithm: algorithm)
+        let padding = _RSA.Signing.Padding.insecurePKCS1v1_5
+        let sig = CheckoutFixture.rsaSign(enc: enc, privateKey: pair.privateKey, padding: padding)
         let pem = CheckoutFixture.wrapMachinePEM(enc: enc, sig: sig, alg: "rsa-sha256")
 
         let file = try MachineFile.parse(pem)
@@ -48,8 +49,8 @@ struct MachineFileTests {
         let pair = RsaTestKey.generate()
         let json = CheckoutFixture.machinePayloadJSON()
         let enc = CheckoutFixture.plainEnc(json: json)
-        let algorithm = SecKeyAlgorithm.rsaSignatureMessagePSSSHA256
-        let sig = CheckoutFixture.rsaSign(enc: enc, privateKey: pair.privateKey, algorithm: algorithm)
+        let padding = _RSA.Signing.Padding.PSS
+        let sig = CheckoutFixture.rsaSign(enc: enc, privateKey: pair.privateKey, padding: padding)
         let pem = CheckoutFixture.wrapMachinePEM(enc: enc, sig: sig, alg: "rsa-pss-sha256")
 
         let file = try MachineFile.parse(pem)
@@ -79,8 +80,8 @@ struct MachineFileTests {
         // Even a validly-signed PKCS1 signature must not slip through under
         // the JWT scheme -- the scheme itself is rejected before any
         // signature check runs.
-        let algorithm = SecKeyAlgorithm.rsaSignatureMessagePKCS1v15SHA256
-        let sig = CheckoutFixture.rsaSign(enc: enc, privateKey: pair.privateKey, algorithm: algorithm)
+        let padding = _RSA.Signing.Padding.insecurePKCS1v1_5
+        let sig = CheckoutFixture.rsaSign(enc: enc, privateKey: pair.privateKey, padding: padding)
         let pem = CheckoutFixture.wrapMachinePEM(enc: enc, sig: sig, alg: "rsa-sha256")
 
         let file = try MachineFile.parse(pem)

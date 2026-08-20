@@ -2,41 +2,133 @@ import Foundation
 
 /// `Errors.swift`
 ///
-/// **Scope note**: `TamgaCheckoutError` below covers exactly the failure
-/// modes `Checkout/LicenseFile.swift`, `Checkout/MachineFile.swift`, and
-/// `Proof.swift` can throw. The full JSON:API error envelope decoder (401/
-/// 403/404/409/500 handling, per-endpoint conflict/validation codes) for
-/// `TamgaClient`'s HTTP-facing surface is still deferred to a future release
-/// -- see the intended `TamgaError` shape below.
+/// Two error families, deliberately distinct:
 ///
-/// Intended contents once implemented (HTTP-facing surface):
+/// - `TamgaError` below covers live API calls made through `TamgaClient`.
+/// - `TamgaCheckoutError` further down covers parsing, verifying and
+///   decrypting an already-issued offline file or proof, which needs no
+///   network at all.
 ///
-/// - `TamgaError`: models the JSON:API error object
-///   `{ status: UInt16, code: String, detail: String, pointer: String? }`.
-///   Callers must match on `code` (stable, server-documented) and never on
-///   `detail` (human-readable text that may change without notice).
-/// - Fixed-status cases: `.notFound` (404), `.unauthorized` (401),
-///   `.forbidden` (403), `.internalServerError` (500 -- generic, never leaks
-///   DB detail server-side).
-/// - Per-endpoint conflict codes (409): `.keyTaken`, `.fingerprintTaken`,
-///   `.pidTaken`.
-/// - Per-endpoint validation codes (422): `.checkInNotRequired`, `.ttlInvalid`,
-///   `.licenseNotEncrypted`, `.licenseKeyMissing`, `.schemeNotSupported`,
-///   `.datasetInvalid`.
-/// - A `.unknown(status:code:detail:pointer:)` fallback case for any `code`
-///   not in the known set -- decoding must never crash on an unrecognized
-///   server error code.
-/// - A JSON:API error envelope decoder:
-///   `{"errors": [{ id, status, code, title, detail, source: { pointer } }]}`.
-///
-/// - `429 TOO_MANY_REQUESTS` as a retryable case. The server does return 429,
-///   so this is not optional: the transport that eventually decodes these
-///   errors has to parse and cap `Retry-After`, back off with jittered
-///   exponential delays, and auto-retry only `GET` plus the five safe `POST`
-///   actions (`validate`, `validate-key`, `check-in`, `check-out`, `ping`).
-///   Creates stay excluded -- retrying one risks a duplicate resource.
-public enum TamgaError {
-    // Intentionally empty. Implementation deferred to a future release.
+/// A caller deciding whether to fall back to offline verification wants that
+/// distinction, and within `TamgaError` wants the further distinction between
+/// `.transport` (no response arrived, which says nothing about the license) and
+/// `.api` (the server answered, and its answer is authoritative).
+
+/// An error from a live API call.
+public enum TamgaError: Error, Sendable {
+    /// The server returned a non-2xx response.
+    ///
+    /// Match on `error.code`, which is stable and server-documented. Never
+    /// match on `detail`, which is human-readable text that may be reworded
+    /// between server versions.
+    case api(APIError)
+
+    /// The request never produced an HTTP response -- a connection failure, a
+    /// timeout, a TLS error, or a cancelled retry backoff.
+    ///
+    /// This says nothing about the license itself, unlike `.api`.
+    case transport(message: String, underlying: (any Error)?)
+
+    /// The server answered with something this SDK could not decode as either
+    /// a valid response or a JSON:API error document.
+    ///
+    /// `underlying` keeps the original typed `DecodingError`, whose coding path
+    /// says which field failed. Stringifying it here would leave a caller's
+    /// error reporting nothing structured to work with.
+    case malformedResponse(message: String, underlying: (any Error)?)
+
+    /// `TamgaClient.activateMachine` found the license over a policy limit.
+    ///
+    /// **The machine has already been deleted** by the time this is thrown --
+    /// activation rolls back so a rejected activation does not leave an
+    /// orphaned row consuming a seat. The meta identifies which limit was hit.
+    case machineOverLimit(ValidationMeta)
+
+    /// `TamgaClient.activateMachine` created the machine, then the validation
+    /// call itself failed -- a network error or an unrelated server fault, not
+    /// a verdict about the license.
+    ///
+    /// **The machine still exists.** Whether it is permitted is unknown, so
+    /// deleting it would destroy a seat on the strength of a transient error.
+    /// The machine is handed back instead: retry the validation, or delete it
+    /// with `deleteMachine(_:)`.
+    ///
+    /// This mirrors `tamga-go`, which returns the created machine alongside the
+    /// error rather than rolling back. `tamga-java` rolls back instead, because
+    /// throwing leaves it no way to return the machine; Swift has one.
+    case activationValidationFailed(machine: Machine, underlying: any Error)
+
+    /// A decoded JSON:API error object plus the response it arrived with.
+    public struct APIError: Equatable, Sendable {
+        /// The code used when the body is absent, unreadable, or not JSON:API.
+        public static let unknownCode = "UNKNOWN"
+
+        /// The stable error code. This is what callers should match on.
+        public let code: String
+        /// The HTTP status the error arrived with.
+        public let httpStatus: Int
+        /// Human-readable detail. Never match on this.
+        public let detail: String?
+        /// The short error title.
+        public let title: String?
+        /// The server-assigned error id.
+        public let id: String?
+        /// A JSON pointer identifying the offending request field.
+        public let pointer: String?
+        /// Diagnostic response headers, notably the request id worth logging.
+        public let responseMetadata: ResponseMetadata
+    }
+
+    /// The stable error code, when this is an `.api` error.
+    public var apiCode: String? {
+        if case .api(let error) = self { return error.code }
+        return nil
+    }
+
+    /// The HTTP status, when this is an `.api` error.
+    public var httpStatus: Int? {
+        if case .api(let error) = self { return error.httpStatus }
+        return nil
+    }
+}
+
+extension TamgaError: LocalizedError {
+    public var errorDescription: String? {
+        switch self {
+        case .api(let error):
+            if let detail = error.detail {
+                return "\(error.code): \(detail)"
+            }
+            return error.code
+        case .transport(let message, _):
+            return message
+        case .malformedResponse(let message, _):
+            return message
+        case .machineOverLimit(let meta):
+            return "Machine activation rolled back: over policy limit (\(meta.code.wireValue))."
+        case .activationValidationFailed(let machine, let underlying):
+            return "Machine \(machine.id) was created, but validating the license failed: "
+                + "\(underlying). The machine still exists."
+        }
+    }
+}
+
+/// The wire shape of a JSON:API error document.
+struct ErrorDocument: Decodable {
+    struct Source: Decodable {
+        let pointer: String?
+    }
+
+    struct Entry: Decodable {
+        let id: String?
+        let status: String?
+        let code: String?
+        let title: String?
+        let detail: String?
+        let source: Source?
+    }
+
+    let errors: [Entry]?
 }
 
 /// Errors thrown by `Checkout/LicenseFile.swift`, `Checkout/MachineFile.swift`,

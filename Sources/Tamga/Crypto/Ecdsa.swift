@@ -1,8 +1,8 @@
-import CryptoKit
+import Crypto
 import Foundation
 
-/// ECDSA P-256/SHA-256 signature verification via CryptoKit's `P256.Signing`
-/// (native since iOS 13 / macOS 10.15, no third-party dependency).
+/// ECDSA P-256/SHA-256 signature verification via swift-crypto's `P256.Signing`,
+/// which forwards to CryptoKit on Apple platforms and to BoringSSL on Linux.
 ///
 /// Used by `Checkout.MachineFile` -- the ECDSA-P256 branch of the
 /// scheme-dispatched machine-file verifier.
@@ -11,9 +11,17 @@ enum Ecdsa {
     /// -- as raw DER OID content bytes (no tag/length prefix).
     private static let p256CurveOID: [UInt8] = [0x2A, 0x86, 0x48, 0xCE, 0x3D, 0x03, 0x01, 0x07]
 
-    /// Verifies an ECDSA P-256/SHA-256 signature over raw `(r, s)`
-    /// concatenated bytes (the IEEE P1363 wire format this scheme uses, as
-    /// opposed to DER-encoded ASN.1).
+    /// Verifies an ECDSA P-256/SHA-256 signature encoded as ASN.1 DER.
+    ///
+    /// CRITICAL: the signature is DER, NOT the raw `(r, s)` IEEE P1363
+    /// concatenation. The server signs with `ECDSA_P256_SHA256_ASN1`, and
+    /// every other SDK in the fleet decodes it that way -- `tamga-go` uses
+    /// `ecdsa.VerifyASN1`, `tamga-rust` uses `ECDSA_P256_SHA256_ASN1`, and
+    /// `tamga-js` passes `{ format: "der" }`. Confirmed against a real
+    /// checked-out fixture: the signature is 71 bytes beginning with `0x30`
+    /// (a DER SEQUENCE), where a P1363 signature would be exactly 64 raw
+    /// bytes. This previously used `rawRepresentation`, which rejected every
+    /// genuine server-issued ECDSA machine file.
     ///
     /// - Parameter publicKeyDER: an X.509 `SubjectPublicKeyInfo`-encoded public key.
     ///
@@ -39,7 +47,7 @@ enum Ecdsa {
         }
 
         guard let key = try? P256.Signing.PublicKey(derRepresentation: publicKeyDER),
-              let ecdsaSignature = try? P256.Signing.ECDSASignature(rawRepresentation: signature)
+              let ecdsaSignature = try? P256.Signing.ECDSASignature(derRepresentation: signature)
         else {
             return false
         }

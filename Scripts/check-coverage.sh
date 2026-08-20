@@ -10,7 +10,12 @@
 #   xcrun llvm-cov export -summary-only \
 #     .build/debug/TamgaPackageTests.xctest/Contents/MacOS/TamgaPackageTests \
 #     -instr-profile .build/debug/codecov/default.profdata \
+#     -ignore-filename-regex='(\.build|Tests)/' \
 #     | Scripts/check-coverage.sh
+#
+# The -ignore-filename-regex is not optional. Without it the summary includes
+# .build/checkouts -- all of swift-crypto and its vendored BoringSSL -- which
+# this suite does not exercise and which drags the figure far below the gate.
 #
 # Reads the `llvm-cov export -summary-only` JSON summary from stdin, extracts
 # the overall line-coverage percentage, and fails (non-zero exit) if it is

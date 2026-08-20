@@ -3,11 +3,15 @@
 Official Swift SDK for Tamga. Integrate license activation, offline verification, and machine
 management into your Swift applications.
 
-> **What ships today.** Offline verification is implemented and tested: `.lic`/`.machine` file
-> parse, verify and decrypt, offline proof verification, and the crypto primitives underneath
-> them (118 tests, 80% line coverage gated in CI). The networked half of the SDK —
-> `TamgaClient`, `Transport`, the JSON:API error model — is not implemented yet. Read
-> [Known gaps](#known-gaps) before adopting.
+Two independent surfaces, either usable without the other:
+
+- **`TamgaClient`** talks to the API — validation, activation, checkout, heartbeats, components,
+  processes and entitlements. Twenty `async` endpoints, seven auth transports, and automatic
+  handling of HTTP 429.
+- **`LicenseFile`, `MachineFile` and `MachineProof`** verify `.lic`/`.machine` files and offline
+  proofs with **no network access at all**, once your account's public key is embedded in the app.
+
+Runs on macOS 13+, iOS 16+ and Linux. 193 tests, with an 80% line-coverage gate in CI.
 
 ## Install
 
@@ -17,7 +21,7 @@ central-registry package name:
 ```swift
 // Package.swift
 dependencies: [
-    .package(url: "https://github.com/tamga-sh/tamga-swift", from: "1.1.0"),
+    .package(url: "https://github.com/tamga-sh/tamga-swift", from: "1.2.0"),
 ]
 ```
 
@@ -190,17 +194,56 @@ Full policy, including how to report a vulnerability: [SECURITY.md](SECURITY.md)
 
 ## Known gaps
 
-- **No HTTP client yet.** `TamgaClient`, `Transport`, `TamgaError`, `ValidationCode` and `Policy`
-  are empty placeholders — see each file's own doc comment. Network calls (validation, check-in,
-  checkout, machine management, entitlements) are your code's responsibility today; this SDK
-  verifies what those calls return.
-- **No 429 handling here yet, and that is a gap, not a server-side absence.** The server does
-  return HTTP 429. The Tamga SDKs that ship a transport parse and cap `Retry-After`, retry with
-  jittered exponential backoff, and scope auto-retry to `GET` plus five safe `POST` actions
-  (`validate`, `validate-key`, `check-in`, `check-out`, `ping`) — creates are deliberately
-  excluded. This SDK gets the same behaviour when its transport lands.
-- **`TamgaObjC` exports no public interface yet.** The target builds and can be linked, but the
-  Objective-C wrapper over the Swift API is not written.
+This SDK is a protocol client, not a licensing-enforcement framework. The following are
+deliberate boundaries, not oversights.
+
+**Left to your application**
+
+- **Machine fingerprints.** No SDK in the fleet generates one. Producing a stable, device-specific,
+  reasonably tamper-resistant fingerprint — and keeping it stable across reinstalls — is yours.
+- **Embedding the account public key**, plus rotation and key-id handling.
+- **Persistence.** Nothing is written to disk. Storing `.lic`/`.machine` files, deciding when to
+  refresh them, and securing the license key in the keychain are yours. The only cache is the
+  60-second in-memory entitlement cache, which does not survive a restart.
+- **Grace periods and offline policy**, and **enforcement**: a `ValidationCode` says what happened,
+  not what your app should do about it.
+- **Deciding what to do with a machine whose activation could not be validated.** If
+  `activateMachine` creates the machine and then the validation call fails, the machine is handed
+  back on `TamgaError.activationValidationFailed` rather than deleted — a network blip is not a
+  verdict about the license. Retry the validation, or delete it with `deleteMachine(_:)`.
+- **Clock trust.** A user who moves the clock backwards can revive an expired file. Offline
+  verification accepts an explicit `now`, so you can pass a server-supplied timestamp.
+
+**Server-side limitations this SDK inherits**
+
+- **10 of the 24 `ValidationCode` values are unreachable.** All 24 are modelled;
+  `ValidationCode.isReachable` reports which. Do not build behaviour on an unreachable one.
+- **Only four `Scope` fields are enforced** — product, policy, user, environment. The other four
+  are sent, parsed, then ignored.
+- **The heartbeat window is a hardcoded 600s**, not driven by `policy.heartbeat_duration`.
+- **`hasEntitlement` reads a single page** of 100 entitlements, the server maximum.
+- **No auto-update API and no RFC 9421 response-signature verification.**
+
+**Transport hardening**
+
+- **Redirects are refused.** The API never legitimately redirects, and a 3xx can carry credentials
+  to a host you never configured — the session-cookie form especially, which no framework-level
+  stripping protects.
+- **Response bodies are capped at 32 MiB, enforced during the transfer.** A response that declares
+  more than the cap is refused before any body arrives, and one that declares nothing is cut off the
+  moment the running total crosses it. A timeout bounds how long a response may take, not how large
+  it may be.
+- **Requests carry a resource timeout, not just a per-request one.** `timeoutIntervalForRequest`
+  resets on every chunk received, so a server trickling bytes can hold a connection open
+  indefinitely under it alone.
+- **Cancelling the calling task cancels the request**, rather than abandoning the `await` while the
+  transfer continues in the background.
+
+**Packaging**
+
+- **`TamgaObjC` exports no public interface yet.** The target builds and can be linked on Apple
+  platforms, but the Objective-C wrapper over the Swift API is not written. It is excluded from
+  Linux builds, where Objective-C interop does not exist.
 - **Machine files carry no signed claims.** Only license files have `meta` claims and the `+v2`
   `alg` check; a machine file's binding to one machine comes from the fingerprint being HKDF
   `info`.
@@ -209,6 +252,7 @@ Full policy, including how to report a vulnerability: [SECURITY.md](SECURITY.md)
 
 - [tamga.sh](https://tamga.sh) — product documentation and the SDK protocol reference.
 - [`SECURITY.md`](SECURITY.md) — the verification contract, format v2, and vulnerability reporting.
+- [`CONTRIBUTING.md`](CONTRIBUTING.md) — build, test and release workflow.
 - [`CLAUDE.md`](CLAUDE.md) — architecture, dev commands, and gotchas for contributors.
 
 ## License

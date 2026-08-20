@@ -1,4 +1,4 @@
-import CryptoKit
+import Crypto
 import Foundation
 
 /// HKDF-SHA256 (RFC 5869) via CryptoKit's `HKDF<SHA256>` (native since
