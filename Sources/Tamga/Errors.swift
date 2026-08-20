@@ -31,7 +31,11 @@ public enum TamgaError: Error, Sendable {
 
     /// The server answered with something this SDK could not decode as either
     /// a valid response or a JSON:API error document.
-    case malformedResponse(String)
+    ///
+    /// `underlying` keeps the original typed `DecodingError`, whose coding path
+    /// says which field failed. Stringifying it here would leave a caller's
+    /// error reporting nothing structured to work with.
+    case malformedResponse(message: String, underlying: (any Error)?)
 
     /// `TamgaClient.activateMachine` found the license over a policy limit.
     ///
@@ -39,6 +43,20 @@ public enum TamgaError: Error, Sendable {
     /// activation rolls back so a rejected activation does not leave an
     /// orphaned row consuming a seat. The meta identifies which limit was hit.
     case machineOverLimit(ValidationMeta)
+
+    /// `TamgaClient.activateMachine` created the machine, then the validation
+    /// call itself failed -- a network error or an unrelated server fault, not
+    /// a verdict about the license.
+    ///
+    /// **The machine still exists.** Whether it is permitted is unknown, so
+    /// deleting it would destroy a seat on the strength of a transient error.
+    /// The machine is handed back instead: retry the validation, or delete it
+    /// with `deleteMachine(_:)`.
+    ///
+    /// This mirrors `tamga-go`, which returns the created machine alongside the
+    /// error rather than rolling back. `tamga-java` rolls back instead, because
+    /// throwing leaves it no way to return the machine; Swift has one.
+    case activationValidationFailed(machine: Machine, underlying: any Error)
 
     /// A decoded JSON:API error object plus the response it arrived with.
     public struct APIError: Equatable, Sendable {
@@ -84,10 +102,13 @@ extension TamgaError: LocalizedError {
             return error.code
         case .transport(let message, _):
             return message
-        case .malformedResponse(let message):
+        case .malformedResponse(let message, _):
             return message
         case .machineOverLimit(let meta):
             return "Machine activation rolled back: over policy limit (\(meta.code.wireValue))."
+        case .activationValidationFailed(let machine, let underlying):
+            return "Machine \(machine.id) was created, but validating the license failed: "
+                + "\(underlying). The machine still exists."
         }
     }
 }

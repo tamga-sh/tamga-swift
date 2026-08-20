@@ -142,17 +142,38 @@ struct TransportTests {
     }
 
     @Test("a path segment cannot escape via a slash or a dot-segment")
-    func pathSegmentCannotEscape() {
+    func pathSegmentCannotEscape() throws {
         // A slash must not open a new segment.
-        #expect(Transport.encodePathSegment("a/b") == "a%2Fb")
+        #expect(try Transport.encodePathSegment("a/b") == "a%2Fb")
         // Dots are unreserved, so escaping alone leaves a dot-segment intact.
         // They are encoded explicitly so the component stays literal.
-        #expect(Transport.encodePathSegment("..") == "%2E%2E")
-        #expect(Transport.encodePathSegment(".") == "%2E")
+        #expect(try Transport.encodePathSegment("..") == "%2E%2E")
+        #expect(try Transport.encodePathSegment(".") == "%2E")
         // An ordinary id is untouched, and a dot inside a longer id is fine.
-        #expect(Transport.encodePathSegment("lic-1") == "lic-1")
-        #expect(Transport.encodePathSegment("v1.2") == "v1.2")
-        #expect(Transport.encodePathSegment("a b") == "a%20b")
+        #expect(try Transport.encodePathSegment("lic-1") == "lic-1")
+        #expect(try Transport.encodePathSegment("v1.2") == "v1.2")
+        #expect(try Transport.encodePathSegment("a b") == "a%20b")
+        // A percent sign is itself escaped, so a pre-encoded slash cannot be
+        // reinterpreted downstream.
+        #expect(try Transport.encodePathSegment("a%2Fb") == "a%252Fb")
+        // Query and fragment delimiters cannot be injected either.
+        #expect(try Transport.encodePathSegment("a?b#c") == "a%3Fb%23c")
+    }
+
+    @Test("an empty path segment is rejected rather than silently collapsing")
+    func emptyPathSegmentIsRejected() async {
+        // Left to collapse, a caller-supplied empty id builds `/licenses//actions/check-in`
+        // and comes back as an opaque 404 instead of an actionable client-side error.
+        #expect(throws: TamgaError.self) {
+            try Transport.encodePathSegment("")
+        }
+
+        let performer = MockPerformer()
+        let client = TamgaClient.mocked(performer)
+        await #expect(throws: TamgaError.self) {
+            _ = try await client.checkIn("")
+        }
+        #expect(await performer.requestCount == 0)
     }
 
     @Test("sanitizeVersion drops disallowed characters")

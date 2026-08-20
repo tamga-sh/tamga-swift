@@ -31,6 +31,13 @@ extension TamgaClient {
     /// - Throws: `TamgaError.machineOverLimit` if validation reported an
     ///   over-limit code. The machine has already been deleted by then; the
     ///   meta says which limit was exceeded.
+    ///
+    ///   `TamgaError.activationValidationFailed` if the validation call itself
+    ///   failed. **The machine is NOT deleted in that case** and is handed back
+    ///   on the error, because a network blip is not a verdict about the
+    ///   license and deleting on one would destroy a seat for no reason. This
+    ///   follows `tamga-go` rather than `tamga-java`: Java rolls back because
+    ///   throwing leaves it no way to return the machine, and Swift has one.
     public func activateMachine(
         _ options: CreateMachineOptions,
         scope: Scope? = nil
@@ -41,11 +48,11 @@ extension TamgaClient {
             validation = try await validateById(options.licenseId,
                                                 options: ValidateOptions(scope: scope))
         } catch {
-            // Validation failed outright, so whether the machine is permitted
-            // is unknown. Roll it back rather than leak a seat whose id the
-            // caller never received, and let the original failure propagate.
-            await deleteIgnoringFailure(machine.id)
-            throw error
+            // Deliberately NOT rolled back. Whether the machine is permitted is
+            // unknown, and a transient failure is not grounds to destroy a seat
+            // the license may well be entitled to. The machine goes back to the
+            // caller, who can retry validation or delete it.
+            throw TamgaError.activationValidationFailed(machine: machine, underlying: error)
         }
 
         if validation.meta.code.isOverLimit {

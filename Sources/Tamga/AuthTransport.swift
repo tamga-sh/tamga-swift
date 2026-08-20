@@ -76,3 +76,50 @@ public enum AuthTransport: Sendable, Equatable {
         Data(raw.utf8).base64EncodedString()
     }
 }
+
+// MARK: - Redaction
+
+/// Keeps the credential out of any textual rendering of this value.
+///
+/// Swift synthesizes a description for a type that declares none by reflecting
+/// over its stored properties, and reflection does not respect access control:
+/// `private` is a compile-time restriction, not a runtime one. Without these
+/// conformances, `print(client)`, `"\(client)"`, `String(describing:)` and
+/// `dump(client)` each render the raw license key, bearer token or session id
+/// in cleartext -- verified, not assumed.
+///
+/// That matters more than it first appears, because `TamgaClient` is documented
+/// as a long-lived, application-wide value. Exactly that kind of object gets
+/// swept into generic app-state logging, dependency-container dumps, crash
+/// reporter context, or a `po client` during support triage.
+///
+/// All three conformances are needed. `CustomStringConvertible` alone fixes
+/// interpolation and `print`, but `dump` keeps recursing into the associated
+/// value until `customMirror` reports no children.
+extension AuthTransport: CustomStringConvertible, CustomDebugStringConvertible, CustomReflectable {
+    /// The transport's form, never its credential.
+    public var description: String {
+        switch self {
+        case .bearer:
+            return "AuthTransport.bearer(<redacted>)"
+        case .basicEmailPassword:
+            return "AuthTransport.basicEmailPassword(<redacted>)"
+        case .basicToken:
+            return "AuthTransport.basicToken(<redacted>)"
+        case .basicLicenseKey:
+            return "AuthTransport.basicLicenseKey(<redacted>)"
+        case .licenseKey:
+            return "AuthTransport.licenseKey(<redacted>)"
+        case .sessionCookie:
+            return "AuthTransport.sessionCookie(<redacted>)"
+        case .queryParameter:
+            return "AuthTransport.queryParameter(<redacted>)"
+        }
+    }
+
+    public var debugDescription: String { description }
+
+    /// An empty mirror, so `dump` cannot walk past `description` into the
+    /// associated value.
+    public var customMirror: Mirror { Mirror(self, children: []) }
+}

@@ -4,52 +4,6 @@ import Foundation
 import FoundationNetworking
 #endif
 
-/// Performs one HTTP request.
-///
-/// This is the seam every test double replaces. It is a protocol rather than a
-/// concrete `URLSession` because `URLProtocol`-based stubbing is unreliable on
-/// swift-corelibs-foundation, so a Linux-supporting package cannot depend on
-/// it -- and a protocol seam is clearer anyway.
-public protocol HTTPRequestPerforming: Sendable {
-    /// Sends `request` and returns its body and response.
-    func perform(_ request: URLRequest) async throws -> (Data, HTTPURLResponse)
-}
-
-/// The default `HTTPRequestPerforming`, backed by `URLSession`.
-public struct URLSessionTransport: HTTPRequestPerforming {
-    private let session: URLSession
-
-    /// Wraps a session. The default session is configured by `TamgaClient`.
-    public init(session: URLSession) {
-        self.session = session
-    }
-
-    public func perform(_ request: URLRequest) async throws -> (Data, HTTPURLResponse) {
-        // Deliberately the completion-handler API bridged through a
-        // continuation, not `URLSession.data(for:)`.
-        //
-        // The async method has had availability gaps in
-        // swift-corelibs-foundation, and this package now builds for Linux.
-        // The continuation form behaves identically on every platform this
-        // supports, at the cost of a few lines.
-        try await withCheckedThrowingContinuation { continuation in
-            let task = session.dataTask(with: request) { data, response, error in
-                if let error {
-                    continuation.resume(throwing: error)
-                    return
-                }
-                guard let http = response as? HTTPURLResponse else {
-                    continuation.resume(throwing: TamgaError.transport(
-                        message: "Response was not an HTTP response.", underlying: nil))
-                    return
-                }
-                continuation.resume(returning: (data ?? Data(), http))
-            }
-            task.resume()
-        }
-    }
-}
-
 /// URL assembly, auth, headers, rate-limit retry, and error mapping.
 ///
 /// Callers do not use this directly -- build a `TamgaClient` instead.
@@ -183,10 +137,21 @@ struct Transport: Sendable {
     /// dot-segment that URL resolution collapses -- which is exactly how an id
     /// of `../../evil` reached a different endpoint. Such a segment has its
     /// dots percent-encoded so it stays an ordinary, literal path component.
-    static func encodePathSegment(_ segment: String) -> String {
-        let escaped = segment.addingPercentEncoding(
-            withAllowedCharacters: unreservedPathCharacters) ?? ""
-        if !escaped.isEmpty, escaped.allSatisfy({ $0 == "." }) {
+    static func encodePathSegment(_ segment: String) throws -> String {
+        guard !segment.isEmpty else {
+            // A caller-supplied empty id would otherwise collapse to `//` and
+            // come back as an opaque 404 rather than an actionable error.
+            throw TamgaError.transport(message: "A path segment cannot be empty.", underlying: nil)
+        }
+        guard let escaped = segment.addingPercentEncoding(
+            withAllowedCharacters: unreservedPathCharacters) else {
+            // Fails closed. This is the one function standing between a
+            // caller-supplied id and the request path, so it must not degrade
+            // to something that merely looks harmless.
+            throw TamgaError.transport(message: "A path segment could not be encoded.",
+                                       underlying: nil)
+        }
+        if escaped.allSatisfy({ $0 == "." }) {
             return String(repeating: "%2E", count: escaped.count)
         }
         return escaped
@@ -328,7 +293,7 @@ struct Transport: Sendable {
         // `../../evil` produced `.../licenses/../../evil/actions/check-in` and
         // called an entirely different endpoint.
         let allSegments = ["v1", "accounts", accountId] + segments
-        let encoded = allSegments.map(Self.encodePathSegment)
+        let encoded = try allSegments.map(Self.encodePathSegment)
         let basePath = components.percentEncodedPath.hasSuffix("/")
             ? String(components.percentEncodedPath.dropLast())
             : components.percentEncodedPath
@@ -387,4 +352,19 @@ struct Transport: Sendable {
             responseMetadata: metadata
         ))
     }
+}
+
+// MARK: - Redaction
+
+/// Redacts the whole transport rather than relying on `AuthTransport`'s own
+/// redaction alone.
+///
+/// A parent struct with no description of its own is rendered by reflecting
+/// over its stored properties, so `Transport` would otherwise expose its
+/// `auth` field for `dump` to walk. Redacting at both levels means neither one
+/// has to be the only thing standing between a credential and a log line.
+extension Transport: CustomStringConvertible, CustomDebugStringConvertible, CustomReflectable {
+    var description: String { "Transport(host: \(host), accountId: \(accountId), auth: <redacted>)" }
+    var debugDescription: String { description }
+    var customMirror: Mirror { Mirror(self, children: []) }
 }

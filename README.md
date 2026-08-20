@@ -207,6 +207,10 @@ deliberate boundaries, not oversights.
   60-second in-memory entitlement cache, which does not survive a restart.
 - **Grace periods and offline policy**, and **enforcement**: a `ValidationCode` says what happened,
   not what your app should do about it.
+- **Deciding what to do with a machine whose activation could not be validated.** If
+  `activateMachine` creates the machine and then the validation call fails, the machine is handed
+  back on `TamgaError.activationValidationFailed` rather than deleted — a network blip is not a
+  verdict about the license. Retry the validation, or delete it with `deleteMachine(_:)`.
 - **Clock trust.** A user who moves the clock backwards can revive an expired file. Offline
   verification accepts an explicit `now`, so you can pass a server-supplied timestamp.
 
@@ -225,10 +229,15 @@ deliberate boundaries, not oversights.
 - **Redirects are refused.** The API never legitimately redirects, and a 3xx can carry credentials
   to a host you never configured — the session-cookie form especially, which no framework-level
   stripping protects.
-- **Response bodies are capped at 32 MiB.** A timeout bounds duration, not size. A response that
-  *declares* more than the cap is cancelled before its body transfers; one that declares no length
-  is still buffered by `URLSession` before the cap is applied, so the limit is a backstop there
-  rather than a guarantee.
+- **Response bodies are capped at 32 MiB, enforced during the transfer.** A response that declares
+  more than the cap is refused before any body arrives, and one that declares nothing is cut off the
+  moment the running total crosses it. A timeout bounds how long a response may take, not how large
+  it may be.
+- **Requests carry a resource timeout, not just a per-request one.** `timeoutIntervalForRequest`
+  resets on every chunk received, so a server trickling bytes can hold a connection open
+  indefinitely under it alone.
+- **Cancelling the calling task cancels the request**, rather than abandoning the `await` while the
+  transfer continues in the background.
 
 **Packaging**
 

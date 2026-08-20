@@ -85,13 +85,14 @@ public struct TamgaClient: Sendable {
         // caller never configured, and the session-cookie form in particular
         // is not protected by any framework-level stripping.
         configuration.httpShouldSetCookies = false
-        let session = URLSession(
-            configuration: configuration,
-            delegate: SessionPolicyDelegate(maxResponseBytes: maxResponseBytes),
-            delegateQueue: nil)
+        // timeoutIntervalForRequest resets on every chunk received, so on its own it only guards
+        // against total silence -- a server trickling a byte every 25 seconds keeps resetting it
+        // and is otherwise bounded only by the platform default resource timeout of seven days.
+        configuration.timeoutIntervalForResource = timeout * 4
         self.init(accountId: accountId, auth: auth, host: host, apiVersion: apiVersion,
                   otp: otp, maxRetries: maxRetries,
-                  performer: URLSessionTransport(session: session),
+                  performer: URLSessionTransport(configuration: configuration,
+                                                 maxResponseBytes: maxResponseBytes),
                   maxResponseBytes: maxResponseBytes)
     }
 
@@ -235,7 +236,7 @@ public struct TamgaClient: Sendable {
             return try TamgaJSONCoding.decoder.decode(type, from: data)
         } catch {
             throw TamgaError.malformedResponse(
-                "Could not decode the server's response: \(error)")
+                message: "Could not decode the server's response: \(error)", underlying: error)
         }
     }
 
@@ -268,4 +269,18 @@ public struct TamgaClient: Sendable {
         guard options.limit > 0, resources.count >= options.limit else { return nil }
         return resources.last?.id
     }
+}
+
+// MARK: - Redaction
+
+/// Redacts the client, which is the value most likely to be logged.
+///
+/// `TamgaClient` is documented as a long-lived, application-wide value, which
+/// makes it exactly what gets captured by app-state logging, container dumps
+/// and crash-reporter context. See `AuthTransport`'s redaction note for why
+/// access control does not help here.
+extension TamgaClient: CustomStringConvertible, CustomDebugStringConvertible, CustomReflectable {
+    public var description: String { "TamgaClient(<redacted>)" }
+    public var debugDescription: String { description }
+    public var customMirror: Mirror { Mirror(self, children: []) }
 }

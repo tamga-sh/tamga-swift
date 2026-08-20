@@ -223,6 +223,35 @@ struct TamgaClientTests {
         }
     }
 
+    @Test("activateMachine keeps the machine when validation itself fails")
+    func activateMachineKeepsMachineWhenValidationFails() async throws {
+        let performer = MockPerformer()
+        await performer.enqueue(body: Fixtures.machine)
+        await performer.enqueue(status: 500, body: "{\"errors\":[{\"code\":\"INTERNAL_SERVER_ERROR\"}]}")
+        let client = TamgaClient.mocked(performer)
+
+        do {
+            _ = try await client.activateMachine(
+                CreateMachineOptions(fingerprint: "fp-1", licenseId: "lic-1"))
+            Issue.record("expected activation to fail")
+        } catch let error as TamgaError {
+            guard case .activationValidationFailed(let machine, _) = error else {
+                Issue.record("expected .activationValidationFailed, got \(error)")
+                return
+            }
+            // The machine is handed back so the caller can retry validation or
+            // delete it. A transient failure is not a verdict about the
+            // license, and deleting on one would destroy a seat for no reason.
+            #expect(machine.id == "mach-1")
+        }
+
+        // Exactly two calls: the create and the failed validate. No DELETE.
+        // This is tamga-go's behaviour; tamga-java rolls back only because
+        // throwing leaves it no way to return the machine.
+        #expect(await performer.requestCount == 2)
+        #expect(await performer.request(at: 1)?.httpMethod != "DELETE")
+    }
+
     @Test("checkOutLicense requests the raw certificate over GET")
     func checkOutLicenseRequestsRawCertificateOverGet() async throws {
         let performer = MockPerformer()
