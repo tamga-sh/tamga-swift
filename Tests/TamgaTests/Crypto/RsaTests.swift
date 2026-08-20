@@ -1,5 +1,5 @@
 import Foundation
-import Security
+import _CryptoExtras
 import Testing
 
 @testable import Tamga
@@ -10,7 +10,7 @@ struct RsaTests {
     func verifyPkcs1ReturnsTrueForValidSignature() {
         let pair = RsaTestKey.generate()
         let message = Data("machine file payload".utf8)
-        let signature = RsaTestKey.sign(message, with: pair.privateKey, algorithm: .rsaSignatureMessagePKCS1v15SHA256)
+        let signature = RsaTestKey.sign(message, with: pair.privateKey, padding: .insecurePKCS1v1_5)
 
         #expect(Rsa.verifyPkcs1(publicKeyDER: pair.publicKeySPKI, message: message, signature: signature))
     }
@@ -19,7 +19,7 @@ struct RsaTests {
     func verifyPssReturnsTrueForValidSignature() {
         let pair = RsaTestKey.generate()
         let message = Data("machine file payload".utf8)
-        let signature = RsaTestKey.sign(message, with: pair.privateKey, algorithm: .rsaSignatureMessagePSSSHA256)
+        let signature = RsaTestKey.sign(message, with: pair.privateKey, padding: .PSS)
 
         #expect(Rsa.verifyPss(publicKeyDER: pair.publicKeySPKI, message: message, signature: signature))
     }
@@ -28,7 +28,7 @@ struct RsaTests {
     func verifyPkcs1ReturnsFalseForTamperedMessage() {
         let pair = RsaTestKey.generate()
         let original = Data("original".utf8)
-        let signature = RsaTestKey.sign(original, with: pair.privateKey, algorithm: .rsaSignatureMessagePKCS1v15SHA256)
+        let signature = RsaTestKey.sign(original, with: pair.privateKey, padding: .insecurePKCS1v1_5)
 
         let tampered = Data("tampered".utf8)
         #expect(!Rsa.verifyPkcs1(publicKeyDER: pair.publicKeySPKI, message: tampered, signature: signature))
@@ -38,7 +38,7 @@ struct RsaTests {
     func verifyPkcs1RejectsPssSignature() {
         let pair = RsaTestKey.generate()
         let message = Data("machine file payload".utf8)
-        let pssSignature = RsaTestKey.sign(message, with: pair.privateKey, algorithm: .rsaSignatureMessagePSSSHA256)
+        let pssSignature = RsaTestKey.sign(message, with: pair.privateKey, padding: .PSS)
 
         #expect(!Rsa.verifyPkcs1(publicKeyDER: pair.publicKeySPKI, message: message, signature: pssSignature))
     }
@@ -48,8 +48,8 @@ struct RsaTests {
         let signingPair = RsaTestKey.generate()
         let otherPair = RsaTestKey.generate()
         let message = Data("machine file payload".utf8)
-        let algorithm = SecKeyAlgorithm.rsaSignatureMessagePKCS1v15SHA256
-        let signature = RsaTestKey.sign(message, with: signingPair.privateKey, algorithm: algorithm)
+        let padding = _RSA.Signing.Padding.insecurePKCS1v1_5
+        let signature = RsaTestKey.sign(message, with: signingPair.privateKey, padding: padding)
 
         #expect(!Rsa.verifyPkcs1(publicKeyDER: otherPair.publicKeySPKI, message: message, signature: signature))
     }

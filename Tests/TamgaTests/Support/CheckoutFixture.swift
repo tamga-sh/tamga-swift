@@ -1,5 +1,6 @@
-import CryptoKit
+import Crypto
 import Foundation
+import _CryptoExtras
 
 @testable import Tamga
 
@@ -53,12 +54,14 @@ enum CheckoutFixture {
         guard let signature = try? privateKey.signature(for: message) else {
             fatalError("CheckoutFixture.ecdsaSign: signing unexpectedly failed")
         }
-        return signature.rawRepresentation.base64EncodedString()
+        // DER, not the raw (r, s) concatenation: the server signs with
+        // ECDSA_P256_SHA256_ASN1. See Ecdsa.verify's doc comment.
+        return signature.derRepresentation.base64EncodedString()
     }
 
-    static func rsaSign(enc: String, privateKey: SecKey, algorithm: SecKeyAlgorithm) -> String {
+    static func rsaSign(enc: String, privateKey: _RSA.Signing.PrivateKey, padding: _RSA.Signing.Padding) -> String {
         let message = Data(enc.utf8)
-        return RsaTestKey.sign(message, with: privateKey, algorithm: algorithm).base64EncodedString()
+        return RsaTestKey.sign(message, with: privateKey, padding: padding).base64EncodedString()
     }
 
     static func wrapInPEM(certificate: Certificate, beginMarker: String, endMarker: String) -> String {

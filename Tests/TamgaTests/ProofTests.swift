@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+import _CryptoExtras
 
 @testable import Tamga
 
@@ -8,9 +9,9 @@ struct ProofTests {
     /// Signs `payload` with `privateKey` and wraps it in a `"v1x0."`-prefixed
     /// `MachineProof`, matching what `parse` expects from a real
     /// `meta.proof` string.
-    private static func signedProof(payload: String, privateKey: SecKey) throws -> MachineProof {
-        let algorithm = SecKeyAlgorithm.rsaSignatureMessagePKCS1v15SHA256
-        let signature = RsaTestKey.sign(Data(payload.utf8), with: privateKey, algorithm: algorithm)
+    private static func signedProof(payload: String, privateKey: _RSA.Signing.PrivateKey) throws -> MachineProof {
+        let padding = _RSA.Signing.Padding.insecurePKCS1v1_5
+        let signature = RsaTestKey.sign(Data(payload.utf8), with: privateKey, padding: padding)
         return try MachineProof.parse("v1x0." + signature.base64EncodedString())
     }
 

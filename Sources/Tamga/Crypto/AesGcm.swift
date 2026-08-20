@@ -1,4 +1,4 @@
-import CryptoKit
+import Crypto
 import Foundation
 
 /// AES-256-GCM open/seal wrapper over CryptoKit's `AES.GCM` (native since

@@ -1,4 +1,4 @@
-import CryptoKit
+import Crypto
 import Foundation
 
 /// Ed25519 signature verification, backed by CryptoKit's `Curve25519.Signing`
