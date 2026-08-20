@@ -40,7 +40,7 @@ jobs:
       # required checks that can't ever report. A short-lived GitHub App
       # installation token is a distinct actor, so its PRs do trigger
       # workflows and the required checks actually run.
-      - uses: actions/create-github-app-token@v2
+      - uses: actions/create-github-app-token@v3
         id: app-token
         timeout-minutes: 10
         with:
