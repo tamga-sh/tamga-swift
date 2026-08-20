@@ -23,11 +23,10 @@ public enum HeartbeatStatus: String, Equatable, Sendable {
 /// A machine resource, flattened from the JSON:API `data.id` + `data.attributes`
 /// shape, mirroring `License`'s flattening pattern.
 ///
-/// **Scope note**: models exactly the fields needed to decode a checked-out
-/// `.machine` file's embedded resource (`Checkout/MachineFile.swift`) --
-/// the full `TamgaClient`-facing machine-management surface (create/update/
-/// heartbeat-ping endpoints, `HeartbeatScheduler`) is still deferred to a
-/// future release.
+/// The same type serves two paths: the subset embedded in a checked-out
+/// `.machine` file (`Checkout/MachineFile.swift`) and the full resource
+/// returned by the machine endpoints. A field the current path does not carry
+/// is simply `nil`.
 public struct Machine: Equatable, Sendable {
     /// The machine's unique ID.
     public let id: String
@@ -45,9 +44,60 @@ public struct Machine: Equatable, Sendable {
     public let lastCheckOutAt: Date?
     /// Arbitrary caller-supplied metadata attached to the machine.
     public let metadata: [String: JSONValue]?
+    /// The machine's reported IP address.
+    public let ip: String?
+    /// The machine's hostname.
+    public let hostname: String?
+    /// The machine's reported core count.
+    public let cores: Int?
+    /// The machine's reported memory in bytes.
+    public let memory: Int64?
+    /// The machine's reported disk in bytes.
+    public let disk: Int64?
+    /// When the next heartbeat is expected.
+    public let nextHeartbeatAt: Date?
+    /// When the machine was registered.
+    public let created: Date?
+    /// When the machine was last updated.
+    public let updated: Date?
 
-    // No explicit init: Swift synthesizes an equivalent memberwise one
-    // automatically (internal visibility, matching the properties above).
+    /// The API-facing fields default so the offline decode path, which carries
+    /// none of them, can keep constructing a `Machine` unchanged.
+    init(
+        id: String,
+        fingerprint: String?,
+        name: String?,
+        platform: String?,
+        heartbeatStatus: HeartbeatStatus,
+        lastHeartbeatAt: Date?,
+        lastCheckOutAt: Date?,
+        metadata: [String: JSONValue]?,
+        ip: String? = nil,
+        hostname: String? = nil,
+        cores: Int? = nil,
+        memory: Int64? = nil,
+        disk: Int64? = nil,
+        nextHeartbeatAt: Date? = nil,
+        created: Date? = nil,
+        updated: Date? = nil
+    ) {
+        self.id = id
+        self.fingerprint = fingerprint
+        self.name = name
+        self.platform = platform
+        self.heartbeatStatus = heartbeatStatus
+        self.lastHeartbeatAt = lastHeartbeatAt
+        self.lastCheckOutAt = lastCheckOutAt
+        self.metadata = metadata
+        self.ip = ip
+        self.hostname = hostname
+        self.cores = cores
+        self.memory = memory
+        self.disk = disk
+        self.nextHeartbeatAt = nextHeartbeatAt
+        self.created = created
+        self.updated = updated
+    }
 
     /// Flattens a raw JSON:API machine resource into a `Machine`. Shared by
     /// `TamgaClient`'s (future) response mapping and `Checkout.MachineFile`'s
@@ -62,7 +112,15 @@ public struct Machine: Equatable, Sendable {
             heartbeatStatus: HeartbeatStatus(wireValue: attrs?.heartbeatStatus),
             lastHeartbeatAt: attrs?.lastHeartbeatAt,
             lastCheckOutAt: attrs?.lastCheckOutAt,
-            metadata: attrs?.metadata
+            metadata: attrs?.metadata,
+            ip: attrs?.ip,
+            hostname: attrs?.hostname,
+            cores: attrs?.cores,
+            memory: attrs?.memory,
+            disk: attrs?.disk,
+            nextHeartbeatAt: attrs?.nextHeartbeatAt,
+            created: attrs?.created,
+            updated: attrs?.updated
         )
     }
 }
@@ -81,12 +139,21 @@ struct MachineAttributes: Decodable {
     let lastHeartbeatAt: Date?
     let lastCheckOutAt: Date?
     let metadata: [String: JSONValue]?
+    let ip: String?
+    let hostname: String?
+    let cores: Int?
+    let memory: Int64?
+    let disk: Int64?
+    let nextHeartbeatAt: Date?
+    let created: Date?
+    let updated: Date?
 
-    enum CodingKeys: String, CodingKey {
-        case fingerprint, name, platform
-        case heartbeatStatus = "heartbeat_status"
-        case lastHeartbeatAt = "last_heartbeat_at"
-        case lastCheckOutAt = "last_check_out_at"
-        case metadata
-    }
+    // No explicit CodingKeys. This type used to declare snake_case ones, which
+    // silently cancelled against the shared decoder's `.convertFromSnakeCase`
+    // strategy: the strategy rewrote the wire key `heartbeat_status` to
+    // `heartbeatStatus`, then lookup compared that against a CodingKey whose
+    // stringValue was `heartbeat_status`, matched nothing, and decoded nil.
+    // Every machine came back with `.notStarted` and null timestamps no matter
+    // what the server sent. `LicenseAttributes` never had the redundant keys
+    // and was always correct.
 }
