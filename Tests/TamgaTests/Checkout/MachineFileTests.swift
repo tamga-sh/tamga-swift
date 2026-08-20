@@ -1,6 +1,6 @@
+import _CryptoExtras
 import Crypto
 import Foundation
-import _CryptoExtras
 import Testing
 
 @testable import Tamga
