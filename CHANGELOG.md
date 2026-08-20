@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.2.0](https://github.com/tamga-sh/tamga-swift/compare/v1.1.2...v1.2.0) (2026-08-20)
+
+
+### Features
+
+* **client:** implement the HTTP API client, and support Linux ([#17](https://github.com/tamga-sh/tamga-swift/issues/17)) ([97659d0](https://github.com/tamga-sh/tamga-swift/commit/97659d076574ee426430de5b9637ce27c2f123b6))
+
 ## [1.1.2](https://github.com/tamga-sh/tamga-swift/compare/v1.1.1...v1.1.2) (2026-08-18)
 
 
