@@ -26,11 +26,6 @@ public struct Page<Item: Sendable>: Sendable {
     public let nextCursor: String?
     /// This page's items.
     public let items: [Item]
-
-    init(nextCursor: String?, items: [Item]) {
-        self.nextCursor = nextCursor
-        self.items = items
-    }
 }
 
 extension Page: Equatable where Item: Equatable {}

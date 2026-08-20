@@ -39,11 +39,21 @@ import PackageDescription
 // crypto is precisely what produced the curve-confusion bug class this SDK family's audit found in
 // 3 of 5 reimplementations, and a second implementation is a second place for it to reappear.
 //
-// swift-crypto is pinned to the 3.x line deliberately: 4.0.0 renames the `_CryptoExtras` module to
-// `CryptoExtras`, which would break the RSA import below.
+// swift-crypto is pinned to the 4.x line, and the floor is not cosmetic.
+//
+// The 3.x line has a memory-safety bug on the RSA public-key parse ERROR path:
+// `_RSA.Signing.PublicKey(derRepresentation:)` corrupts the heap when the DER fails to parse.
+// Reproduced against 3.15.1 with a standalone probe -- 2000 sequential malformed parses abort with
+// `nanov2_guard_corruption_detected`, while valid parses never do. That path is reachable from
+// production with attacker-supplied bytes: `Rsa.importPublicKey` hands it whatever public key a
+// caller passes for machine-file and offline-proof verification, and a malformed key is precisely
+// what an attacker would supply. 4.5.1 is clean across the same probe.
+//
+// 4.0.0 also renamed `_CryptoExtras` to `CryptoExtras`, dropping the underscore, so the import
+// below is a supported module name rather than an SPI-flavoured one.
 //
 // `Crypto` forwards to CryptoKit on Apple platforms, so this is not an extra dependency there so
-// much as a portable spelling of the same primitives. `_CryptoExtras` supplies RSA, which neither
+// much as a portable spelling of the same primitives. `CryptoExtras` supplies RSA, which neither
 // CryptoKit nor `Crypto` expose.
 // TamgaObjC is Apple-only and is conditionally excluded below.
 //
@@ -70,14 +80,14 @@ let package = Package(
         .library(name: "Tamga", targets: ["Tamga"]),
     ] + objcProducts,
     dependencies: [
-        .package(url: "https://github.com/apple/swift-crypto.git", from: "3.13.0"),
+        .package(url: "https://github.com/apple/swift-crypto.git", from: "4.5.1"),
     ],
     targets: [
         .target(
             name: "Tamga",
             dependencies: [
                 .product(name: "Crypto", package: "swift-crypto"),
-                .product(name: "_CryptoExtras", package: "swift-crypto"),
+                .product(name: "CryptoExtras", package: "swift-crypto"),
             ]
         ),
         .testTarget(
@@ -85,7 +95,7 @@ let package = Package(
             dependencies: [
                 "Tamga",
                 .product(name: "Crypto", package: "swift-crypto"),
-                .product(name: "_CryptoExtras", package: "swift-crypto"),
+                .product(name: "CryptoExtras", package: "swift-crypto"),
             ]
         ),
     ] + objcTargets

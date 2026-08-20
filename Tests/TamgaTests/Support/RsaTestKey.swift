@@ -1,4 +1,4 @@
-import _CryptoExtras
+import CryptoExtras
 import Foundation
 
 /// Test-only RSA-2048 keypair generation and signing, on the same

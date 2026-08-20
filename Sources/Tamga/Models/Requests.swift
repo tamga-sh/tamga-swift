@@ -71,7 +71,7 @@ public struct CreateMachineOptions: Equatable, Sendable {
             "cores": cores.map { .int(Int64($0)) } ?? .null,
             "memory": memory.map(JSONValue.int) ?? .null,
             "disk": disk.map(JSONValue.int) ?? .null,
-            "metadata": .object(metadata ?? [:]),
+            "metadata": .object(metadata ?? [:])
         ]
         return .object([
             "data": .object([
@@ -81,11 +81,11 @@ public struct CreateMachineOptions: Equatable, Sendable {
                     "license": .object([
                         "data": .object([
                             "type": .string("licenses"),
-                            "id": .string(licenseId),
-                        ]),
-                    ]),
-                ]),
-            ]),
+                            "id": .string(licenseId)
+                        ])
+                    ])
+                ])
+            ])
         ])
     }
 }
@@ -117,7 +117,7 @@ public struct CreateComponentOptions: Equatable, Sendable {
             "machine_id": .string(machineId),
             "fingerprint": .string(fingerprint),
             "name": .string(name),
-            "metadata": .object(metadata ?? [:]),
+            "metadata": .object(metadata ?? [:])
         ])
     }
 }
@@ -148,7 +148,7 @@ public struct CreateProcessOptions: Equatable, Sendable {
         .object([
             "machine_id": .string(machineId),
             "pid": .string(pid),
-            "metadata": .object(metadata ?? [:]),
+            "metadata": .object(metadata ?? [:])
         ])
     }
 }
@@ -193,8 +193,8 @@ public struct CheckOutOptions: Equatable, Sendable {
         .object([
             "meta": .object([
                 "encrypt": .bool(encrypt),
-                "ttl": ttl.map { .int(Int64($0)) } ?? .null,
-            ]),
+                "ttl": ttl.map { .int(Int64($0)) } ?? .null
+            ])
         ])
     }
 }

@@ -1,5 +1,5 @@
-import _CryptoExtras
 import Crypto
+import CryptoExtras
 import Foundation
 import Testing
 

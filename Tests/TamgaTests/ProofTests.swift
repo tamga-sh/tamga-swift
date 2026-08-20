@@ -1,4 +1,4 @@
-import _CryptoExtras
+import CryptoExtras
 import Foundation
 import Testing
 

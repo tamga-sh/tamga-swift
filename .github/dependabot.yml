@@ -1,5 +1,13 @@
 version: 2
 updates:
+  # The package now has a real dependency (apple/swift-crypto), so the swift
+  # ecosystem is worth tracking. It was previously omitted because there was
+  # nothing to update.
+  - package-ecosystem: "swift"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:

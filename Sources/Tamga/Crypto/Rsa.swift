@@ -1,4 +1,4 @@
-import _CryptoExtras
+import CryptoExtras
 import Foundation
 
 /// RSA-2048 signature verification (PKCS#1 v1.5 and PSS, both SHA-256) via

@@ -45,12 +45,45 @@ jobs:
           XCTEST_BUNDLE=$(find "$BIN_PATH" -name '*.xctest' -maxdepth 1 | head -n1)
           COV_BIN="${XCTEST_BUNDLE}/Contents/MacOS/$(basename "${XCTEST_BUNDLE}" .xctest)"
           PROFDATA="${BIN_PATH}/codecov/default.profdata"
+          # -ignore-filename-regex restricts the measurement to this package's own
+          # sources. Without it the summary also covers .build/checkouts -- i.e. all of
+          # swift-crypto and its vendored BoringSSL -- which this suite has no business
+          # exercising and which drags the reported figure to ~29%. The gate is documented
+          # as covering the Tamga target, so it measures the Tamga target.
           xcrun llvm-cov export -summary-only "${COV_BIN}" -instr-profile "${PROFDATA}" \
+            -ignore-filename-regex='(\.build|Tests)/' \
             | ./Scripts/check-coverage.sh
 
   # iOS target: build/test-pass check only. Coverage gating lives solely in
   # the macOS job above to avoid double-counting the same test suite run
   # twice against the 80% threshold.
+  # Linux target. The package is no longer Apple-only: every crypto primitive
+  # runs on swift-crypto, which is portable, so Linux is a supported platform
+  # and has to be built and tested like one.
+  #
+  # The container is pinned to swift:6.1 rather than 6.0 because swift-crypto's
+  # transitive swift-asn1 dependency requires Swift tools 6.1. Xcode 16.4,
+  # pinned above, ships Swift 6.1.2, so both jobs build against the same
+  # language version.
+  #
+  # No coverage gate here, matching the iOS job: the macOS job owns that
+  # threshold and double-gating on the same number gains nothing.
+  linux:
+    name: Linux (swift build + swift test)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    container: swift:6.1-jammy
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Build
+        run: swift build
+        timeout-minutes: 15
+
+      - name: Test
+        run: swift test
+        timeout-minutes: 15
+
   ios:
     name: iOS Simulator (xcodebuild test)
     runs-on: macos-15

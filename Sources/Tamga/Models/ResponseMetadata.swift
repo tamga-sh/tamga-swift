@@ -1,5 +1,9 @@
 import Foundation
 
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
+
 /// Diagnostic response headers carried alongside every API error.
 ///
 /// A missing header is the empty string rather than an error -- this is

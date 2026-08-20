@@ -49,7 +49,7 @@ public enum OverageStrategy: Equatable, Sendable {
         (.allow125x, "ALLOW_1_25X_OVERAGE"),
         (.allow15x, "ALLOW_1_5X_OVERAGE"),
         (.allow2x, "ALLOW_2X_OVERAGE"),
-        (.alwaysAllow, "ALWAYS_ALLOW_OVERAGE"),
+        (.alwaysAllow, "ALWAYS_ALLOW_OVERAGE")
     ]
 
     /// Maps a wire string, falling back to `.noOverage`.

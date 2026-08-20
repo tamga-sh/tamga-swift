@@ -94,7 +94,7 @@ public enum ValidationCode: Equatable, Sendable {
         (.fingerprintScopeMismatch, "FINGERPRINT_SCOPE_MISMATCH"),
         (.componentsScopeMismatch, "COMPONENTS_SCOPE_MISMATCH"),
         (.checksumScopeMismatch, "CHECKSUM_SCOPE_MISMATCH"),
-        (.versionScopeMismatch, "VERSION_SCOPE_MISMATCH"),
+        (.versionScopeMismatch, "VERSION_SCOPE_MISMATCH")
     ]
 
     /// Maps a raw wire string, falling back to `.unknown` for anything
@@ -153,13 +153,6 @@ public struct ValidationMeta: Equatable, Sendable {
     public let detail: String?
     /// The stable validation result code.
     public let code: ValidationCode
-
-    init(ts: Date?, valid: Bool, detail: String?, code: ValidationCode) {
-        self.ts = ts
-        self.valid = valid
-        self.detail = detail
-        self.code = code
-    }
 }
 
 /// The wire shape of a validation meta block, decoded then flattened.

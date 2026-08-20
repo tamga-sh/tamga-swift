@@ -144,9 +144,14 @@ public struct License: Equatable, Sendable {
 /// The JSON:API `attributes` bag for a license resource.
 struct LicenseAttributes: Decodable {
     let key: String?
-    let suspended: Bool
+    // Optional, though the server always sends them today. A non-optional
+    // scalar here makes one omitted field fail the whole response decode,
+    // which is the opposite of the forward-compatibility stance the rest of
+    // this SDK takes -- unknown fields are ignored, so missing ones should not
+    // be fatal either.
+    let suspended: Bool?
     let expiry: Date?
-    let uses: Int
+    let uses: Int?
     let lastValidatedAt: Date?
     let lastCheckInAt: Date?
     let metadata: [String: JSONValue]?
