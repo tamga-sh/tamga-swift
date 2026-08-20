@@ -72,7 +72,8 @@ public struct TamgaClient: Sendable {
         apiVersion: String = TamgaClient.defaultAPIVersion,
         otp: String? = nil,
         maxRetries: Int = TamgaClient.defaultMaxRetries,
-        timeout: TimeInterval = TamgaClient.defaultTimeout
+        timeout: TimeInterval = TamgaClient.defaultTimeout,
+        maxResponseBytes: Int = TamgaClient.defaultMaxResponseBytes
     ) {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.timeoutIntervalForRequest = timeout
@@ -84,12 +85,14 @@ public struct TamgaClient: Sendable {
         // caller never configured, and the session-cookie form in particular
         // is not protected by any framework-level stripping.
         configuration.httpShouldSetCookies = false
-        let session = URLSession(configuration: configuration,
-                                 delegate: RedirectRefusingDelegate(),
-                                 delegateQueue: nil)
+        let session = URLSession(
+            configuration: configuration,
+            delegate: SessionPolicyDelegate(maxResponseBytes: maxResponseBytes),
+            delegateQueue: nil)
         self.init(accountId: accountId, auth: auth, host: host, apiVersion: apiVersion,
                   otp: otp, maxRetries: maxRetries,
-                  performer: URLSessionTransport(session: session))
+                  performer: URLSessionTransport(session: session),
+                  maxResponseBytes: maxResponseBytes)
     }
 
     /// Creates a client over a caller-supplied request performer.

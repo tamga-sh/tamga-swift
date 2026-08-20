@@ -225,7 +225,10 @@ deliberate boundaries, not oversights.
 - **Redirects are refused.** The API never legitimately redirects, and a 3xx can carry credentials
   to a host you never configured — the session-cookie form especially, which no framework-level
   stripping protects.
-- **Response bodies are capped at 32 MiB.** A timeout bounds duration, not size.
+- **Response bodies are capped at 32 MiB.** A timeout bounds duration, not size. A response that
+  *declares* more than the cap is cancelled before its body transfers; one that declares no length
+  is still buffered by `URLSession` before the cap is applied, so the limit is a backstop there
+  rather than a guarantee.
 
 **Packaging**
 
