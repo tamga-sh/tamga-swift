@@ -85,9 +85,16 @@ public enum OverageStrategy: Equatable, Sendable {
     }
 }
 
-/// What happens to a machine row once its heartbeat window elapses.
+/// What happens to a machine row once its heartbeat window elapses -- **only
+/// under a policy whose `requireHeartbeat` is `true`**.
+///
+/// The server's cull job early-returns for any policy that does not require
+/// heartbeats, and `require_heartbeat` defaults to `false`, so on a default
+/// policy this strategy never runs and no machine is ever culled no matter how
+/// long it reports `HeartbeatStatus.dead`.
 public enum HeartbeatCullStrategy: String, Equatable, Sendable {
-    /// Deletes the machine row once dead. The server's default.
+    /// Deletes the machine row once dead, if the policy requires heartbeats at
+    /// all. The server's default value for the column.
     case deactivateDead = "DEACTIVATE_DEAD"
     /// Keeps the dead machine row in place.
     case keepDead = "KEEP_DEAD"
@@ -264,6 +271,12 @@ public struct Policy: Equatable, Sendable {
     /// Whether licences under this policy must periodically check in.
     public let requireCheckIn: Bool
     /// Whether machines under this policy must send heartbeats.
+    ///
+    /// **This is the flag that decides whether a machine is ever culled.** It
+    /// defaults to `false` server-side and the cull job early-returns whenever
+    /// it is unset, so under a default policy a machine reports
+    /// `HeartbeatStatus.dead` forever while keeping its row and its seat.
+    /// `heartbeatCullStrategy` only takes effect when this is `true`.
     public let requireHeartbeat: Bool
     /// Whether checkout files under this policy are encrypted.
     public let encrypted: Bool

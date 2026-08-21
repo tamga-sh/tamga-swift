@@ -21,6 +21,19 @@ struct SchedulerTests {
         func machineCount(nonNil: Bool) -> Int {
             nonNil ? machines.compactMap { $0 }.count : machines.count
         }
+
+        func statuses(prefix count: Int) -> [HeartbeatStatus?] {
+            machines.prefix(count).map { $0?.heartbeatStatus }
+        }
+
+        /// Whether the first recorded error is the server's row-is-gone `404`.
+        ///
+        /// Reduced to a `Bool` in here rather than handing `[(any Error)?]` out
+        /// across the actor boundary, which is not `Sendable`.
+        var firstErrorIsNotFound: Bool {
+            guard let error = errors.compactMap({ $0 }).first else { return false }
+            return (error as? TamgaError)?.isNotFound == true
+        }
     }
 
     @Test("the default interval is a third of the server window")
@@ -63,9 +76,59 @@ struct SchedulerTests {
 
         await scheduler.tick()
 
-        // DEAD means the row was culled server-side: the caller must
-        // re-activate, not keep pinging.
+        // DEAD says only that the last ping is older than the window -- the
+        // row and its seat are still there. It is surfaced, not acted on.
         #expect(await log.machines.first??.heartbeatStatus == .dead)
+    }
+
+    @Test("the loop keeps pinging across three consecutive dead responses")
+    func loopKeepsPingingAcrossThreeConsecutiveDeadResponses() async throws {
+        // Regression: a scheduler that treats DEAD as "the row was culled" and
+        // stops strands a machine the server would have revived. Nothing is
+        // culled at all under a default policy (require_heartbeat = FALSE), the
+        // status is computed from last_heartbeat_at alone, and the ping is an
+        // unconditional last_heartbeat_at = NOW() that brings the machine back.
+        // Only a 404 from the ping means the row is gone.
+        let performer = MockPerformer()
+        await performer.enqueue(body: """
+        {"data":{"id":"mach-1","type":"machines","attributes":{"heartbeat_status":"DEAD"}}}
+        """)
+        let log = TickLog()
+        let scheduler = HeartbeatScheduler(
+            client: TamgaClient.mocked(performer), machineId: "mach-1", interval: 0.02
+        ) { machine, error in
+            await log.record(machine, error)
+        }
+
+        await scheduler.start()
+
+        var observed = 0
+        for _ in 0..<200 where observed < 3 {
+            try await Task.sleep(nanoseconds: 20_000_000)
+            observed = await log.count
+        }
+        await scheduler.stop()
+
+        #expect(observed >= 3)
+        #expect(await log.statuses(prefix: 3) == [.dead, .dead, .dead])
+        #expect(await log.errorCount == 0)
+        #expect(await performer.requestCount >= 3)
+    }
+
+    @Test("a 404 from the ping, not the dead status, is the row-is-gone signal")
+    func notFoundFromThePingIsTheRowIsGoneSignal() async throws {
+        let performer = MockPerformer()
+        await performer.enqueue(status: 404, body: "{\"errors\":[{\"code\":\"NOT_FOUND\"}]}")
+        let log = TickLog()
+        let scheduler = HeartbeatScheduler(
+            client: TamgaClient.mocked(performer), machineId: "mach-1"
+        ) { machine, error in
+            await log.record(machine, error)
+        }
+
+        await scheduler.tick()
+
+        #expect(await log.firstErrorIsNotFound)
     }
 
     @Test("a failed ping is reported rather than swallowed")

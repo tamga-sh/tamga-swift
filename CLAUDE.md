@@ -17,7 +17,7 @@ point at <https://tamga.sh> instead.
 ECDSA-P256, RSA PKCS1/PSS, DER), `Checkout/`, `Proof.swift`, and the HTTP surface
 (`TamgaClient`'s 20 endpoints, `Transport`, `AuthTransport`, the JSON:API error model,
 `EntitlementCache`, both heartbeat schedulers, and the full `Policy` struct) are all implemented
-and tested — 223 tests, ~88% line coverage against an 80% gate.
+and tested — 226 tests, ~88% line coverage against an 80% gate.
 
 The normative description of the network surface is `../docs/api-client-contract.md`, derived from
 `tamga-go`. Behavioural changes to `TamgaClient`/`Transport` should update that document too, or
@@ -197,7 +197,8 @@ specification covers the full set, including analytics/EE items that don't touch
   delays, and scopes auto-retry to `GET` plus `validate`, `validate-key`, `check-in`, `check-out`,
   `ping`, `ping-heartbeat` and `reset-heartbeat`. The last two were wrongly excluded: both are bare
   idempotent state writes, the rate limiter buckets per route pattern (so a whole fleet shares one
-  `ping-heartbeat` budget and throttles itself), and a dropped heartbeat gets the machine culled.
+  `ping-heartbeat` budget and throttles itself), and a dropped heartbeat pushes the machine past
+  its window.
   Creates stay excluded — retrying one risks a duplicate resource and a burnt seat.
 - **Machine creation enforces limits too, and which check fires is the policy's choice.** The
   create-time check runs through the overage strategy: under `NO_OVERAGE` an over-limit `POST
@@ -250,6 +251,16 @@ specification covers the full set, including analytics/EE items that don't touch
   600s regardless of `policy.heartbeat_duration`; process heartbeat window is a hardcoded 30s with
   no resurrection grace period at all. Any heartbeat-scheduler helper in this SDK should derive its
   ping interval from these hardcoded constants, not from a policy value that the server ignores.
+- **`DEAD` does not mean the row was culled, and on a default policy nothing is ever culled.**
+  `require_heartbeat` defaults to `FALSE`, the cull job early-returns for any policy that does not
+  set it, and `Machine::heartbeat_status*` never consults the flag at all — it reports `DEAD` purely
+  from `last_heartbeat_at` against the window. So a machine reports `DEAD` *forever* while its row
+  and its seat are still there, and a ping against it succeeds and revives it: the update is a bare
+  `SET last_heartbeat_at = NOW()` with no resurrection check. A scheduler must therefore keep
+  pinging through `DEAD` — stopping there strands a machine the server would have brought back. The
+  only real row-is-gone signal is a `404 NOT_FOUND` from the ping itself, and re-activation should
+  hang off that (`TamgaError.isNotFound`). Do not reintroduce the old "DEAD means re-activate, don't
+  keep pinging" guidance; it is the bug `tamga-python` shipped.
 - **Both file types derive their AES key with HKDF-SHA256, but never with the same parameters.**
   License file: `salt = "tamga:license-file-key-v1"`, `ikm = <license key>`,
   `info = "license-file"`. Machine file: `salt = "tamga:machine-file-key-v1"`,

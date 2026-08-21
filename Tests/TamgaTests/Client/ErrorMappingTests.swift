@@ -149,6 +149,24 @@ struct ErrorMappingTests {
         #expect(TamgaError.transport(message: "boom", underlying: nil).errorDescription == "boom")
     }
 
+    @Test("a 404 is recognized as not-found however its body decoded")
+    func notFoundIsRecognizedHoweverItsBodyDecoded() {
+        let metadata = ResponseMetadata(tamgaVersion: nil, tamgaEdition: nil,
+                                        tamgaMode: nil, requestId: nil)
+        func apiError(code: String, status: Int) -> TamgaError {
+            .api(TamgaError.APIError(code: code, httpStatus: status, detail: nil, title: nil,
+                                     id: nil, pointer: nil, responseMetadata: metadata))
+        }
+
+        // A ping's 404 is the only signal that a machine row is gone.
+        // HeartbeatStatus.dead is not one: that machine still holds its seat.
+        #expect(apiError(code: TamgaAPIErrorCode.notFound, status: 404).isNotFound)
+        // A 404 whose body was missing or unreadable still counts.
+        #expect(apiError(code: TamgaError.APIError.unknownCode, status: 404).isNotFound)
+        #expect(!apiError(code: TamgaAPIErrorCode.forbidden, status: 403).isNotFound)
+        #expect(!TamgaError.transport(message: "boom", underlying: nil).isNotFound)
+    }
+
     @Test("missing response headers read as empty rather than failing")
     func missingResponseHeadersReadAsEmpty() {
         let metadata = ResponseMetadata(tamgaVersion: nil, tamgaEdition: nil,

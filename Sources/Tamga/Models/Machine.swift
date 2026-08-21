@@ -9,7 +9,18 @@ public enum HeartbeatStatus: String, Equatable, Sendable {
     case notStarted = "NOT_STARTED"
     /// Wire value `ALIVE` -- pinged within the window.
     case alive = "ALIVE"
-    /// Wire value `DEAD` -- window elapsed with no ping.
+    /// Wire value `DEAD` -- the last ping is older than the heartbeat window.
+    ///
+    /// **This does not mean the machine row was culled.** The status is derived
+    /// from `last_heartbeat_at` against the window and never consults the
+    /// policy's `require_heartbeat`, while the server's cull job early-returns
+    /// unless that flag is set -- and it defaults to `false`. On a default
+    /// policy nothing is ever culled, so a machine reports `DEAD` indefinitely
+    /// while its row and its seat are both still there, and a ping against it
+    /// succeeds and revives it.
+    ///
+    /// Keep pinging through `.dead`. The signal that the row is really gone is
+    /// a `404` from the ping itself (`TamgaError.isNotFound`), not this status.
     case dead = "DEAD"
     /// Wire value `RESURRECTED` -- a new ping arrived after a death event was
     /// already recorded, within the resurrection grace window.

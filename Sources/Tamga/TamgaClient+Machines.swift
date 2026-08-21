@@ -119,9 +119,16 @@ extension TamgaClient {
     ///
     /// Use `HeartbeatScheduler` rather than driving this by hand.
     ///
-    /// This is a bare idempotent state write, so it is retried automatically
-    /// after a `429` -- a throttled heartbeat that was silently dropped would
-    /// eventually get the machine culled.
+    /// This is a bare idempotent state write -- an unconditional
+    /// `last_heartbeat_at = NOW()` -- so it is retried automatically after a
+    /// `429`: a throttled heartbeat that was silently dropped would eventually
+    /// push the machine past its window, and under a policy with
+    /// `requireHeartbeat` set that is what gets its row culled.
+    ///
+    /// **A ping against a `.dead` machine succeeds and revives it.** The write
+    /// carries no resurrection check, so keep pinging through `.dead` instead
+    /// of treating it as terminal. The one response that does mean the row is
+    /// gone is a `404` (`TamgaError.isNotFound`); re-activate on that.
     public func pingHeartbeat(machineId: String) async throws -> Machine {
         let data = try await transport.postJSON(
             ["machines", machineId, "actions", "ping-heartbeat"], body: nil)

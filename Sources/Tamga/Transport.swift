@@ -60,10 +60,12 @@ struct Transport: Sendable {
     /// writes -- ping is an unconditional `last_heartbeat_at = NOW()` and reset
     /// clears the same field -- so repeating one cannot burn a seat the way a
     /// repeated create can. Excluding them, as this SDK previously did, meant a
-    /// throttled heartbeat was dropped silently and the machine was culled for
-    /// missing a window it had in fact tried to meet. That is a real risk here:
-    /// the server buckets rate limits per route pattern, so an entire fleet
-    /// shares one budget for `ping-heartbeat` and throttles itself.
+    /// throttled heartbeat was dropped silently and the machine fell past a
+    /// window it had in fact tried to meet -- reporting `DEAD` from then until
+    /// its next ping, and losing its row outright under a policy that requires
+    /// heartbeats. That is a real risk here: the server buckets rate limits per
+    /// route pattern, so an entire fleet shares one budget for `ping-heartbeat`
+    /// and throttles itself.
     static let retryablePostSuffixes = [
         "/actions/validate",
         "/actions/validate-key",

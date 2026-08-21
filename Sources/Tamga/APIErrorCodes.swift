@@ -101,6 +101,11 @@ public enum TamgaAPIErrorCode {
     ///
     /// Live, despite older SDK notes to the contrary: a heartbeat ping against a
     /// machine row that is genuinely gone surfaces here.
+    ///
+    /// **This -- not `HeartbeatStatus.dead` -- is the row-is-gone signal.** A
+    /// machine reporting `DEAD` still holds its row and its seat and is revived
+    /// by its next ping; a machine whose ping `404`s does not exist any more.
+    /// See `TamgaError.isNotFound`.
     public static let notFound = "NOT_FOUND"
 
     /// No usable credential was presented.
@@ -189,5 +194,22 @@ extension TamgaError {
         return error.code == TamgaAPIErrorCode.licenseSuspended
             || error.code == TamgaAPIErrorCode.licenseExpired
             || error.code == TamgaAPIErrorCode.licenseNotAllowed
+    }
+
+    /// Whether the server said the addressed resource does not exist.
+    ///
+    /// **This is the signal a heartbeat scheduler actually wants.** A machine
+    /// reporting `HeartbeatStatus.dead` has not been culled -- culling is gated
+    /// on the policy's `requireHeartbeat`, which is off by default -- so its row
+    /// and its seat are still there and the next ping revives it. A `404` from
+    /// the ping is different: the row is gone, and only a fresh activation
+    /// brings the machine back.
+    ///
+    /// Matches the HTTP status as well as the code, so a `404` whose body was
+    /// missing or unreadable -- which decodes to `APIError.unknownCode` -- is
+    /// still recognized.
+    public var isNotFound: Bool {
+        guard case .api(let error) = self else { return false }
+        return error.httpStatus == 404 || error.code == TamgaAPIErrorCode.notFound
     }
 }

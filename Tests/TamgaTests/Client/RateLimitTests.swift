@@ -96,9 +96,11 @@ struct RateLimitTests {
     func machineHeartbeatActionsAreRetryable() {
         // They do not match `/actions/ping` -- matching is by suffix, not
         // substring -- so they are listed separately. Excluding them meant a
-        // throttled heartbeat was dropped silently and the machine was culled
-        // for missing a window it had tried to meet. Both are bare idempotent
-        // state writes, so repeating one cannot burn a seat.
+        // throttled heartbeat was dropped silently and the machine fell past a
+        // window it had tried to meet -- reporting DEAD until its next ping,
+        // and losing its row outright under a policy that requires heartbeats.
+        // Both are bare idempotent state writes, so repeating one cannot burn
+        // a seat.
         #expect(Transport.isRetryable(method: "POST",
                                       path: "/machines/m-1/actions/ping-heartbeat"))
         #expect(Transport.isRetryable(method: "POST",

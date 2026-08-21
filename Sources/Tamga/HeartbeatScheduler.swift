@@ -5,19 +5,32 @@ import Foundation
 /// The server's heartbeat window is a **hardcoded 600 seconds**, not driven by
 /// the policy's `heartbeat_duration` despite that field existing.
 /// `defaultInterval` is a third of the window, which tolerates two consecutive
-/// failed pings before the machine goes dead.
+/// failed pings before the machine reports `.dead`.
+///
+/// **`.dead` does not mean the machine was culled.** It means only that the
+/// last ping is older than the window. The status is computed from
+/// `last_heartbeat_at` alone and never consults the policy's
+/// `require_heartbeat`, while the server's cull job early-returns unless that
+/// flag is set -- and it defaults to `false`. On a default policy nothing is
+/// ever culled, so a machine reports `.dead` indefinitely with its row and its
+/// seat still in place, and the next ping revives it: the write is a bare
+/// `last_heartbeat_at = NOW()` with no resurrection check.
+///
+/// So keep pinging through `.dead`. The signal that the row is genuinely gone
+/// is a `404` from the ping itself -- `TamgaError.isNotFound` -- and that, not
+/// the status, is what re-activation should hang off.
 ///
 /// ```swift
 /// let scheduler = HeartbeatScheduler(client: client, machineId: machine.id) { machine, error in
-///     // DEAD means the row was culled server-side: re-activate, don't keep pinging.
-///     if machine?.heartbeatStatus == .dead { await reactivate() }
+///     // .dead is survivable: the loop keeps pinging and the next ping revives it.
+///     // A 404 is not -- the row is gone and only a fresh activation brings it back.
+///     if let error = error as? TamgaError, error.isNotFound { await reactivate() }
 /// }
 /// await scheduler.start()
 /// ```
 ///
-/// **Handle the tick callback.** It is the only way to observe the machine
-/// going `.dead`, and errors are reported rather than swallowed for the same
-/// reason.
+/// **Handle the tick callback.** It is the only way to observe a ping failing,
+/// and errors are reported rather than swallowed for that reason.
 public actor HeartbeatScheduler {
     /// The server's hardcoded machine heartbeat window.
     public static let window: TimeInterval = 600
@@ -54,6 +67,12 @@ public actor HeartbeatScheduler {
     /// created, so its heartbeat is already fresh.
     ///
     /// Calling this on an already-running scheduler does nothing.
+    ///
+    /// **The loop is unconditional and deliberately so.** A tick reporting
+    /// `.dead`, and a tick that throws, both leave it running: `.dead` is
+    /// revived by the very next ping, so stopping there strands a machine the
+    /// server would have brought back on its own. Only `stop()` and
+    /// cancellation end it.
     public func start() {
         guard task == nil else { return }
         let interval = self.interval
@@ -65,6 +84,9 @@ public actor HeartbeatScheduler {
                     return
                 }
                 guard let self else { return }
+                // No status check here on purpose -- see start()'s note. The
+                // outcome goes to the caller's tick callback and the loop
+                // continues regardless of what it was.
                 await self.tick()
             }
         }

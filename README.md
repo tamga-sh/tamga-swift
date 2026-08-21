@@ -11,7 +11,7 @@ Two independent surfaces, either usable without the other:
 - **`LicenseFile`, `MachineFile` and `MachineProof`** verify `.lic`/`.machine` files and offline
   proofs with **no network access at all**, once your account's public key is embedded in the app.
 
-Runs on macOS 13+, iOS 16+ and Linux. 223 tests, with an 80% line-coverage gate in CI.
+Runs on macOS 13+, iOS 16+ and Linux. 226 tests, with an 80% line-coverage gate in CI.
 
 ## Install
 
@@ -235,6 +235,12 @@ deliberate boundaries, not oversights.
   create-time `422` throws `machineOverLimit` with nothing to roll back, and an overage-path
   rejection deletes the row it created.
 - **The heartbeat window is a hardcoded 600s**, not driven by `policy.heartbeat_duration`.
+- **`.dead` does not mean the machine is gone.** It means only that the last ping is older than the
+  window. Culling is gated on the policy's `requireHeartbeat`, which is off by default, so on a
+  default policy the row and its seat stay put however long the machine reports `.dead`, and the
+  next ping revives it. Keep pinging through `.dead` — `HeartbeatScheduler` does, deliberately. The
+  signal that the row is genuinely gone is a `404` from the ping itself (`TamgaError.isNotFound`),
+  and that is what should trigger re-activation.
 - **`resetHeartbeat` and `generateOfflineProof` always return `403` to a license-key credential.**
   Both are role-gated server-side; neither is available to an embedded client.
 - **`quickValidate` writes `last_validated_at`** on every call — except when the request carries an
