@@ -125,10 +125,13 @@ extension TamgaClient {
     /// push the machine past its window, and under a policy with
     /// `requireHeartbeat` set that is what gets its row culled.
     ///
-    /// **A ping against a `.dead` machine succeeds and revives it.** The write
-    /// carries no resurrection check, so keep pinging through `.dead` instead
-    /// of treating it as terminal. The one response that does mean the row is
-    /// gone is a `404` (`TamgaError.isNotFound`); re-activate on that.
+    /// **The machine this returns is never `.dead`.** The write lands before
+    /// the status is derived from it, so the response carries `.alive` or
+    /// `.resurrected` -- branching on `.dead` against this call is unreachable
+    /// code. A ping against a machine the server does consider dead still
+    /// succeeds and revives it; the write carries no resurrection check. The
+    /// one response that means the row is gone is a `404`
+    /// (`TamgaError.isNotFound`); re-activate on that, and on nothing else.
     public func pingHeartbeat(machineId: String) async throws -> Machine {
         let data = try await transport.postJSON(
             ["machines", machineId, "actions", "ping-heartbeat"], body: nil)

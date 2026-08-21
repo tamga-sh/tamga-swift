@@ -240,12 +240,18 @@ deliberate boundaries, not oversights.
   never reads the policy, so on a policy with a shorter window the default ping rate is too slow and
   machines will report `.dead`. Callers on such a policy must pass their own `interval`, sized
   against a window this SDK cannot report back to them: it exposes no `getPolicy`/`getMachine`.
-- **`.dead` does not mean the machine is gone.** It means only that the last ping is older than the
-  window. Culling is gated on the policy's `requireHeartbeat`, which is off by default, so on a
-  default policy the row and its seat stay put however long the machine reports `.dead`, and the
-  next ping revives it. Keep pinging through `.dead` — `HeartbeatScheduler` does, deliberately. The
-  signal that the row is genuinely gone is a `404` from the ping itself (`TamgaError.isNotFound`),
-  and that is what should trigger re-activation.
+- **`.dead` never comes back from a ping.** `pingHeartbeat` writes `last_heartbeat_at = NOW()` and
+  then derives the status from that same timestamp, so it answers `.alive` or `.resurrected`;
+  `createMachine` and `resetHeartbeat` answer `.notStarted`; and `validate` never emits
+  `heartbeatDead`. A `.dead` branch in a tick callback is unreachable code. The status is real and
+  is decoded — it is served from a machine *read*, which reaches this SDK through the offline
+  machine file `checkOutMachine` issues — it just is not something a heartbeat loop observes.
+- **`.dead` would not mean the machine is gone either.** It means only that the last ping is older
+  than the window. Culling is gated on the policy's `requireHeartbeat`, which is off by default, so
+  on a default policy the row and its seat stay put however long a machine reads `.dead`, and the
+  next ping revives it. So the rule is positive: the loop stops on no status at all —
+  `HeartbeatScheduler` does not, deliberately. The one terminal signal a ping can give is a `404`
+  (`TamgaError.isNotFound`), and that is what should trigger re-activation.
 - **`resetHeartbeat` and `generateOfflineProof` always return `403` to a license-key credential.**
   Both are role-gated server-side; neither is available to an embedded client.
 - **`quickValidate` writes `last_validated_at`** on every call — except when the request carries an

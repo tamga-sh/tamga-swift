@@ -260,16 +260,26 @@ specification covers the full set, including analytics/EE items that don't touch
   `create`, `ping-heartbeat` and `reset-heartbeat` return the written row without the policy join,
   so there it is `last_heartbeat_at + 600s` whatever the policy says. Only check-out and
   offline-proof, which read through `find_by_id`, derive it from the policy.
-- **`DEAD` does not mean the row was culled, and on a default policy nothing is ever culled.**
-  `require_heartbeat` defaults to `FALSE`, the cull job early-returns for any policy that does not
-  set it, and `Machine::heartbeat_status*` never consults the flag at all — it reports `DEAD` purely
-  from `last_heartbeat_at` against the window. So a machine reports `DEAD` *forever* while its row
-  and its seat are still there, and a ping against it succeeds and revives it: the update is a bare
-  `SET last_heartbeat_at = NOW()` with no resurrection check. A scheduler must therefore keep
-  pinging through `DEAD` — stopping there strands a machine the server would have brought back. The
-  only real row-is-gone signal is a `404 NOT_FOUND` from the ping itself, and re-activation should
-  hang off that (`TamgaError.isNotFound`). Do not reintroduce the old "DEAD means re-activate, don't
-  keep pinging" guidance; it is the bug `tamga-python` shipped.
+- **`DEAD` is not reachable from a ping.** Every write route returns a status that cannot be it:
+  `ping-heartbeat` sets `last_heartbeat_at = NOW()` and `heartbeat_status_within` then measures
+  `Utc::now() - last_heartbeat_at` against the window (`machines/model.rs:124-146`), so it is always
+  `ALIVE` or `RESURRECTED`; `reset-heartbeat` nulls the column and `POST /machines` never sets it,
+  so both are `NOT_STARTED`; and `validate` never constructs `ValidationCode::HeartbeatDead` — the
+  variant exists in `licenses/model.rs:201` with zero construction sites. `DEAD` is served from a
+  machine *read*, which reaches this SDK only through `check-out` and `generate-offline-proof`
+  (both resolve the row via `queries::find_by_id` rather than writing it); `GET /machines/{id}` and
+  the list route are M11/M36 and are not wrapped here. Do not write a `DEAD` branch against a ping
+  response — it is unreachable — and do not delete the enum case or the field over it.
+- **`DEAD` would not mean the row was culled either, and on a default policy nothing is ever
+  culled.** `require_heartbeat` defaults to `FALSE`, the cull job early-returns for any policy that
+  does not set it, and `Machine::heartbeat_status*` never consults the flag at all — it derives
+  `DEAD` purely from `last_heartbeat_at` against the window. So a machine reads `DEAD` *forever*
+  while its row and its seat are still there, and a ping against it succeeds and revives it: the
+  update is a bare `SET last_heartbeat_at = NOW()` with no resurrection check. State the rule
+  positively: a scheduler must not stop on *any* status, expected or not. The only terminal signal
+  from a ping is a `404 NOT_FOUND`, and re-activation should hang off that
+  (`TamgaError.isNotFound`). Do not reintroduce the old "DEAD means re-activate, don't keep
+  pinging" guidance; it is the bug `tamga-python` shipped.
 - **Both file types derive their AES key with HKDF-SHA256, but never with the same parameters.**
   License file: `salt = "tamga:license-file-key-v1"`, `ikm = <license key>`,
   `info = "license-file"`. Machine file: `salt = "tamga:machine-file-key-v1"`,

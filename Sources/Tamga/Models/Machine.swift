@@ -12,16 +12,27 @@ public enum HeartbeatStatus: String, Equatable, Sendable {
     case alive = "ALIVE"
     /// Wire value `DEAD` -- the last ping is older than the heartbeat window.
     ///
-    /// **This does not mean the machine row was culled.** The status is derived
+    /// **No ping ever returns this.** `pingHeartbeat` writes
+    /// `last_heartbeat_at = NOW()` and derives the status from that same
+    /// timestamp, so it answers `.alive` or `.resurrected`; `createMachine` and
+    /// `resetHeartbeat` answer `.notStarted`; and `validate` never emits
+    /// `ValidationCode.heartbeatDead`. The case is neither dead nor deletable
+    /// -- it is part of the wire model and is genuinely served from a machine
+    /// *read*, which reaches this SDK through the offline machine file
+    /// `checkOutMachine` issues, and through `generateOfflineProof` for a
+    /// credential allowed to call it. It is a `GET /machines/{id}` away from
+    /// being routine. What it must not be is a branch in a tick callback.
+    ///
+    /// **It does not mean the row was culled either.** The status is derived
     /// from `last_heartbeat_at` against the window and never consults the
     /// policy's `require_heartbeat`, while the server's cull job early-returns
     /// unless that flag is set -- and it defaults to `false`. On a default
-    /// policy nothing is ever culled, so a machine reports `DEAD` indefinitely
+    /// policy nothing is ever culled, so a machine reads `DEAD` indefinitely
     /// while its row and its seat are both still there, and a ping against it
     /// succeeds and revives it.
     ///
-    /// Keep pinging through `.dead`. The signal that the row is really gone is
-    /// a `404` from the ping itself (`TamgaError.isNotFound`), not this status.
+    /// So stop a heartbeat loop on no status at all. The signal that the row is
+    /// really gone is a `404` from the ping itself (`TamgaError.isNotFound`).
     case dead = "DEAD"
     /// Wire value `RESURRECTED` -- a new ping arrived after a death event was
     /// already recorded, within the resurrection grace window.

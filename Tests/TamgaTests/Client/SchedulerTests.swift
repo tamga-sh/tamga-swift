@@ -76,19 +76,23 @@ struct SchedulerTests {
 
         await scheduler.tick()
 
-        // DEAD says only that the last ping is older than the window -- the
-        // row and its seat are still there. It is surfaced, not acted on.
+        // A real ping cannot answer DEAD: it writes last_heartbeat_at = NOW()
+        // and then derives the status from that same timestamp. The mock forces
+        // the status anyway, to pin that whatever a tick carries is handed
+        // straight to the callback rather than filtered or acted on in the loop.
         #expect(await log.machines.first??.heartbeatStatus == .dead)
     }
 
     @Test("the loop keeps pinging across three consecutive dead responses")
     func loopKeepsPingingAcrossThreeConsecutiveDeadResponses() async throws {
-        // Regression: a scheduler that treats DEAD as "the row was culled" and
-        // stops strands a machine the server would have revived. Nothing is
-        // culled at all under a default policy (require_heartbeat = FALSE), the
-        // status is computed from last_heartbeat_at alone, and the ping is an
-        // unconditional last_heartbeat_at = NOW() that brings the machine back.
-        // Only a 404 from the ping means the row is gone.
+        // The mocked DEAD response is deliberately not one the server can
+        // produce -- ping-heartbeat writes last_heartbeat_at = NOW() before
+        // judging the machine by it, so a real ping answers ALIVE or
+        // RESURRECTED. That is the point: this pins the general property, that
+        // no status stops the loop, using a status the loop should never see.
+        // The narrow version of that property is what tamga-python got wrong --
+        // stopping on DEAD strands a machine the server revives on the next
+        // ping. Only a 404 from the ping means the row is gone.
         let performer = MockPerformer()
         await performer.enqueue(body: """
         {"data":{"id":"mach-1","type":"machines","attributes":{"heartbeat_status":"DEAD"}}}

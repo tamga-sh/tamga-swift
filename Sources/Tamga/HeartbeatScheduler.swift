@@ -14,23 +14,31 @@ import Foundation
 /// under a third of its own window -- a window this SDK cannot report, since it
 /// exposes no `getPolicy`/`getMachine`.
 ///
-/// **`.dead` does not mean the machine was culled.** It means only that the
-/// last ping is older than the window. The status is computed from
-/// `last_heartbeat_at` alone and never consults the policy's
-/// `require_heartbeat`, while the server's cull job early-returns unless that
-/// flag is set -- and it defaults to `false`. On a default policy nothing is
-/// ever culled, so a machine reports `.dead` indefinitely with its row and its
-/// seat still in place, and the next ping revives it: the write is a bare
-/// `last_heartbeat_at = NOW()` with no resurrection check.
+/// **A tick never reports `.dead`.** The ping writes `last_heartbeat_at =
+/// NOW()` and then derives the status from that same timestamp, so this route
+/// answers `.alive` or `.resurrected` and nothing else. A `.dead` branch in a
+/// tick callback is unreachable code. The status is real, just not reachable
+/// from here: it is served from a machine *read*, which this SDK sees only
+/// through the offline machine file `checkOutMachine` issues.
 ///
-/// So keep pinging through `.dead`. The signal that the row is genuinely gone
-/// is a `404` from the ping itself -- `TamgaError.isNotFound` -- and that, not
-/// the status, is what re-activation should hang off.
+/// **So the rule is positive: the loop stops for no status at all** --
+/// not `.dead`, not one this SDK does not recognize. Were a late status to
+/// surface, it would mean only that the last ping is older than the window,
+/// never that the row was culled: culling is gated on the policy's
+/// `require_heartbeat`, which defaults to `false`, and the status never
+/// consults that flag. The row and its seat stay in place, and the next ping
+/// revives the machine -- the write is a bare `last_heartbeat_at = NOW()` with
+/// no resurrection check.
+///
+/// The one terminal signal a ping can give is a `404` -- the row is gone, and
+/// only a fresh activation brings it back. That is what `TamgaError.isNotFound`
+/// is for, and what re-activation should hang off.
 ///
 /// ```swift
 /// let scheduler = HeartbeatScheduler(client: client, machineId: machine.id) { machine, error in
-///     // .dead is survivable: the loop keeps pinging and the next ping revives it.
-///     // A 404 is not -- the row is gone and only a fresh activation brings it back.
+///     // No status branch: a ping answers .alive or .resurrected, and the loop
+///     // keeps running whatever a tick carries.
+///     // A 404 is the one thing that is terminal -- the row is gone.
 ///     if let error = error as? TamgaError, error.isNotFound { await reactivate() }
 /// }
 /// await scheduler.start()
@@ -78,11 +86,12 @@ public actor HeartbeatScheduler {
     ///
     /// Calling this on an already-running scheduler does nothing.
     ///
-    /// **The loop is unconditional and deliberately so.** A tick reporting
-    /// `.dead`, and a tick that throws, both leave it running: `.dead` is
-    /// revived by the very next ping, so stopping there strands a machine the
-    /// server would have brought back on its own. Only `stop()` and
-    /// cancellation end it.
+    /// **The loop is unconditional and deliberately so.** No status ends it
+    /// and neither does a tick that throws. A ping cannot even answer `.dead`
+    /// -- it writes `last_heartbeat_at` before judging the machine by it -- and
+    /// a machine that did read late is revived by the very next ping, so
+    /// stopping would strand one the server would have brought back on its own.
+    /// Only `stop()` and cancellation end it.
     public func start() {
         guard task == nil else { return }
         let interval = self.interval
