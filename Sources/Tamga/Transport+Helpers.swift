@@ -100,47 +100,49 @@ extension Transport {
     }
 }
 
-/// Which shape of route a request is for.
-///
-/// One value rather than two independent flags, because the two properties are
-/// not independent: the only route that skips the account prefix is also the
-/// only one that must skip the credential, and "account-scoped but anonymous"
-/// is not a combination that exists.
-enum RouteScope: Equatable, Sendable {
-    /// Under `/v1/accounts/{accountId}`, carrying the configured credential.
-    /// Every route but one.
-    case account
+extension Transport {
+    /// Which shape of route a request is for.
+    ///
+    /// One value rather than two independent flags, because the two properties are
+    /// not independent: the only route that skips the account prefix is also the
+    /// only one that must skip the credential, and "account-scoped but anonymous"
+    /// is not a combination that exists.
+    enum RouteScope: Equatable, Sendable {
+        /// Under `/v1/accounts/{accountId}`, carrying the configured credential.
+        /// Every route but one.
+        case account
 
-    /// A bare `/v1/...` path on the public route list, sent **with no
-    /// credential at all**. Only `GET /v1/health`.
-    ///
-    /// **The anonymity is a correctness requirement, not a saving.** The
-    /// server's auth middleware resolves the request's credential *before* it
-    /// consults the public-route list, and propagates a resolution failure with
-    /// `?` -- so an unusable credential rejects a public route just as hard as a
-    /// private one (`require_auth.rs:120-127`).
-    ///
-    /// Whether resolution even runs for a path with no `{account_id}` segment
-    /// depends on the server's mode, and the dangerous one is the default.
-    /// In **multiplayer** the account id comes from the path, `/v1/health` has
-    /// none, and resolution short-circuits to "unauthenticated" before touching
-    /// the database (`context.rs:293-297`). In **singleplayer** -- which is the
-    /// `#[default]` (`config.rs:11-12`) -- the account id comes from
-    /// configuration instead, so it is present for *every* path including this
-    /// one, the credential really is looked up, and a licence key under a
-    /// default policy comes back as
-    /// `Err(401 LICENSE_NOT_ALLOWED)` (`license_lookup.rs:83-84`) because
-    /// `authentication_strategy` defaults to `TOKEN`.
-    ///
-    /// The result would be a health probe that fails for exactly the callers
-    /// whose credential is the thing in question -- destroying the one property
-    /// that makes it worth calling. Sending nothing costs nothing: the route is
-    /// public, returns no account data, and is exempt from the host check.
-    ///
-    /// This is a deliberate exception to the fleet contract's "credentials are
-    /// always sent" rule, and the only one.
-    case publicRoot
+        /// A bare `/v1/...` path on the public route list, sent **with no
+        /// credential at all**. Only `GET /v1/health`.
+        ///
+        /// **The anonymity is a correctness requirement, not a saving.** The
+        /// server's auth middleware resolves the request's credential *before* it
+        /// consults the public-route list, and propagates a resolution failure with
+        /// `?` -- so an unusable credential rejects a public route just as hard as a
+        /// private one (`require_auth.rs:120-127`).
+        ///
+        /// Whether resolution even runs for a path with no `{account_id}` segment
+        /// depends on the server's mode, and the dangerous one is the default.
+        /// In **multiplayer** the account id comes from the path, `/v1/health` has
+        /// none, and resolution short-circuits to "unauthenticated" before touching
+        /// the database (`context.rs:293-297`). In **singleplayer** -- which is the
+        /// `#[default]` (`config.rs:11-12`) -- the account id comes from
+        /// configuration instead, so it is present for *every* path including this
+        /// one, the credential really is looked up, and a licence key under a
+        /// default policy comes back as
+        /// `Err(401 LICENSE_NOT_ALLOWED)` (`license_lookup.rs:83-84`) because
+        /// `authentication_strategy` defaults to `TOKEN`.
+        ///
+        /// The result would be a health probe that fails for exactly the callers
+        /// whose credential is the thing in question -- destroying the one property
+        /// that makes it worth calling. Sending nothing costs nothing: the route is
+        /// public, returns no account data, and is exempt from the host check.
+        ///
+        /// This is a deliberate exception to the fleet contract's "credentials are
+        /// always sent" rule, and the only one.
+        case publicRoot
 
-    /// Whether a request on this route carries the configured credential.
-    var sendsCredential: Bool { self == .account }
+        /// Whether a request on this route carries the configured credential.
+        var sendsCredential: Bool { self == .account }
+    }
 }
