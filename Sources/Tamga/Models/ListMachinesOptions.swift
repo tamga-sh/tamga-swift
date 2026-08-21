@@ -173,8 +173,11 @@ public struct UpdateMachineOptions: Equatable, Sendable {
     /// The JSON:API request body.
     ///
     /// Enveloped, like `createMachine` and unlike the flat component and
-    /// process creates. `data.type` is required by the server's deserializer --
-    /// omitting it is a `400` -- even though its value is never checked.
+    /// process creates. `data.type` is a non-optional field on the server's
+    /// request struct, so omitting it fails deserialization before the handler
+    /// runs -- even though the value is never read once parsed (the field
+    /// carries `#[allow(dead_code)]`). Send it; do not rely on its content
+    /// meaning anything.
     ///
     /// Unset fields are omitted rather than sent as null, which is what
     /// "leave unchanged" looks like on the wire. Both spellings mean the same

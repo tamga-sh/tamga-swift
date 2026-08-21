@@ -9,13 +9,17 @@ extension TamgaClient {
     /// account id configured on the client is unused here.
     ///
     /// **Why it is worth having: it separates two failures that otherwise look
-    /// identical.** The server exempts `/v1/health` from both the credential
-    /// check and the `Host`-header check. So if every other call is failing
-    /// with `403` and *"The Host header does not match any configured host"*
-    /// while this call succeeds, the fault is the server's `TAMGA_ALLOWED_HOSTS`
-    /// configuration -- not the caller's credential, not the account id, and
-    /// not the network. If this call fails too, the problem is further out:
-    /// DNS, TLS, a proxy, or the server being down.
+    /// identical.** `/v1/health` is on the server's public-route list and is one
+    /// of only two paths that bypass the `Host`-header check. So if every other
+    /// call is failing with `403` and *"The Host header does not match any
+    /// configured host"* while this call succeeds, the fault is the server's
+    /// `TAMGA_ALLOWED_HOSTS` configuration -- not the caller's credential, not
+    /// the account id, and not the network. If this call fails too, the problem
+    /// is further out: DNS, TLS, a proxy, or the server being down.
+    ///
+    /// Note "on the public-route list", not "exempt from the credential check".
+    /// Those are not the same thing, and the difference is the whole reason for
+    /// the paragraph below.
     ///
     /// **No credential is sent, and that is what makes the diagnostic work.**
     /// This is the one route in this SDK that goes out anonymously.
