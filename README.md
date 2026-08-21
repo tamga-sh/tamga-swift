@@ -11,7 +11,7 @@ Two independent surfaces, either usable without the other:
 - **`LicenseFile`, `MachineFile` and `MachineProof`** verify `.lic`/`.machine` files and offline
   proofs with **no network access at all**, once your account's public key is embedded in the app.
 
-Runs on macOS 13+, iOS 16+ and Linux. 193 tests, with an 80% line-coverage gate in CI.
+Runs on macOS 13+, iOS 16+ and Linux. 223 tests, with an 80% line-coverage gate in CI.
 
 ## Install
 
@@ -214,15 +214,40 @@ deliberate boundaries, not oversights.
 - **Clock trust.** A user who moves the clock backwards can revive an expired file. Offline
   verification accepts an explicit `now`, so you can pass a server-supplied timestamp.
 
-**Server-side limitations this SDK inherits**
+**Server-side behaviour this SDK inherits**
 
-- **10 of the 24 `ValidationCode` values are unreachable.** All 24 are modelled;
+- **License-key auth is off by default.** `AuthTransport.licenseKey` authenticates only when the
+  license's policy sets `authentication_strategy` to `LICENSE` or `MIXED`. The column defaults to
+  `TOKEN`, and `NONE` behaves the same way at that gate, so against a default policy every call
+  fails `401 LICENSE_NOT_ALLOWED`. That is a policy configuration precondition — retrying it, or
+  asking the user for a different key, accomplishes nothing.
+- **8 of the 24 `ValidationCode` values are unreachable.** All 24 are modelled;
   `ValidationCode.isReachable` reports which. Do not build behaviour on an unreachable one.
-- **Only four `Scope` fields are enforced** — product, policy, user, environment. The other four
-  are sent, parsed, then ignored.
+- **Six of the eight `Scope` fields are enforced** — product, policy, user, environment,
+  fingerprint and entitlements. `version` and `checksum` are not sent at all: present on the
+  request they make the server reject the whole validate call with `422 SCOPE_NOT_SUPPORTED`.
+- **`scope.entitlements` takes entitlement codes**, compared case-insensitively, satisfied by
+  policy-inherited entitlements as well as directly attached ones.
+- **Machine `memory` and `disk` are megabytes, not bytes.** Reporting bytes inflates the license's
+  running total by 1,048,576× and trips `MEMORY_LIMIT_EXCEEDED` on the next activation.
+- **Policy limits are checked twice**, at machine creation and again at validation, and the
+  policy's overage strategy decides which one refuses. `activateMachine` handles both: a
+  create-time `422` throws `machineOverLimit` with nothing to roll back, and an overage-path
+  rejection deletes the row it created.
 - **The heartbeat window is a hardcoded 600s**, not driven by `policy.heartbeat_duration`.
-- **`hasEntitlement` reads a single page** of 100 entitlements, the server maximum.
-- **No auto-update API and no RFC 9421 response-signature verification.**
+- **`resetHeartbeat` and `generateOfflineProof` always return `403` to a license-key credential.**
+  Both are role-gated server-side; neither is available to an embedded client.
+- **`quickValidate` writes `last_validated_at`** on every call — except when the request carries an
+  `Origin` header, in which case it silently does not, with an identical response either way. For a
+  genuinely side-effect-free check use `validateById` with `ValidateOptions(skipTouch: true)`.
+- **`listEntitlements` is not paginable.** `page[after]` is ignored on that route, so `nextCursor`
+  is always `nil` and a license with more than 100 effective entitlements cannot be enumerated in
+  full. `hasEntitlement` reads that single page, so a `false` is authoritative only below the
+  ceiling. Component listing is unaffected — keyset pagination works there.
+- **No auto-update API and no RFC 9421 response-signature verification here.** The server's
+  `GET /releases/actions/upgrade` does work (it is public, and answers `204` when you are already
+  current); this SDK simply does not wrap it yet. Artifact download is a different story — the route
+  exists but no role grants the permission it requires, so it `403`s for every client.
 
 **Transport hardening**
 

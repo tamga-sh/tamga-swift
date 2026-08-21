@@ -88,8 +88,8 @@ struct EntitlementTests {
             .contains("limit=\(TamgaClient.entitlementLookupPageSize)") == true)
     }
 
-    @Test("listEntitlements synthesizes a cursor only for a full page")
-    func listEntitlementsSynthesizesCursorOnlyForFullPage() async throws {
+    @Test("listEntitlements never publishes a cursor, even on a full page")
+    func listEntitlementsNeverPublishesCursor() async throws {
         let performer = MockPerformer()
         await performer.enqueue(body: Self.twoEntitlements)
 
@@ -97,20 +97,84 @@ struct EntitlementTests {
             licenseId: "lic-1", options: ListOptions(limit: 2))
 
         #expect(page.items.count == 2)
-        // A full page means there may be more, so the cursor is the last id.
-        #expect(page.nextCursor == "ent-2")
+        // A full page used to synthesize a cursor here. The server ignores
+        // `page[after]` on this route -- the listing unions direct and
+        // policy-inherited rows, so no single keyset describes it -- and a
+        // caller looping on that cursor refetches page one forever.
+        #expect(page.nextCursor == nil)
     }
 
-    @Test("a short page ends the pagination")
-    func shortPageEndsPagination() async throws {
+    @Test("listEntitlements does not send the inert keyset parameter")
+    func listEntitlementsDoesNotSendKeysetParameter() async throws {
         let performer = MockPerformer()
         await performer.enqueue(body: Self.twoEntitlements)
 
-        let page = try await TamgaClient.mocked(performer).listEntitlements(
-            licenseId: "lic-1", options: ListOptions(limit: 50))
+        _ = try await TamgaClient.mocked(performer).listEntitlements(
+            licenseId: "lic-1", options: ListOptions(after: "ent-9", limit: 2))
 
-        #expect(page.items.count == 2)
-        #expect(page.nextCursor == nil)
+        let query = await performer.request(at: 0)?.url?.query ?? ""
+        #expect(!query.contains("ent-9"))
+        #expect(query.contains("limit=2"))
+    }
+
+    @Test("the inherited flag is carried through")
+    func inheritedFlagIsCarriedThrough() async throws {
+        let performer = MockPerformer()
+        await performer.enqueue(body: """
+        {"data":[{"id":"ent-1","type":"entitlements",\
+        "attributes":{"code":"PRO","name":"Pro","inherited":true}},\
+        {"id":"ent-2","type":"entitlements",\
+        "attributes":{"code":"BETA","name":"Beta","inherited":false}}]}
+        """)
+
+        let page = try await TamgaClient.mocked(performer).listEntitlements(licenseId: "lic-1")
+
+        // Inherited entitlements cannot be detached, and the item route 404s for
+        // them -- dropping the flag left a caller no way to tell.
+        #expect(page.items.first?.inherited == true)
+        #expect(page.items.last?.inherited == false)
+    }
+
+    @Test("the inherited flag is absent where the server does not emit it")
+    func inheritedFlagIsAbsentWhereNotEmitted() async throws {
+        let performer = MockPerformer()
+        await performer.enqueue(body: """
+        {"data":{"id":"ent-1","type":"entitlements","attributes":{"code":"PRO"}}}
+        """)
+
+        let entitlement = try await TamgaClient.mocked(performer).getEntitlement(
+            licenseId: "lic-1", entitlementId: "ent-1")
+
+        #expect(entitlement.inherited == nil)
+    }
+
+    @Test("listComponents synthesizes a cursor only for a full page")
+    func listComponentsSynthesizesCursorOnlyForFullPage() async throws {
+        let performer = MockPerformer()
+        await performer.enqueue(body: """
+        {"data":[{"id":"comp-1","type":"components","attributes":{"name":"a"}},\
+        {"id":"comp-2","type":"components","attributes":{"name":"b"}}]}
+        """)
+
+        let page = try await TamgaClient.mocked(performer).listComponents(
+            machineId: "mach-1", options: ListOptions(limit: 2))
+
+        // Keyset pagination really works on components, unlike entitlements.
+        #expect(page.nextCursor == "comp-2")
+    }
+
+    @Test("an unspecified page size names the server maximum rather than defaulting to 25")
+    func unspecifiedPageSizeNamesServerMaximum() async throws {
+        let performer = MockPerformer()
+        await performer.enqueue(body: "{\"data\":[]}")
+
+        _ = try await TamgaClient.mocked(performer).listComponents(machineId: "mach-1")
+
+        // Omitting `limit` let the server apply its own default of 25 while the
+        // cursor logic compared against a different number, so a full page read
+        // as a short one and pagination stopped after 25 rows.
+        let query = await performer.request(at: 0)?.url?.query ?? ""
+        #expect(query.contains("limit=\(TamgaClient.defaultPageSize)"))
     }
 
     @Test("a page cursor is sent as the keyset parameter")

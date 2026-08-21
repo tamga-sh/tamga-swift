@@ -21,6 +21,18 @@ public struct Entitlement: Equatable, Sendable {
     public let updated: Date?
     /// Arbitrary key/value metadata.
     public let metadata: [String: JSONValue]?
+    /// `true` when the license holds this through its policy rather than by a
+    /// direct attachment, `nil` when the response does not say.
+    ///
+    /// Only the license-scoped list emits this flag; account-, policy- and
+    /// release-scoped entitlement responses omit it, hence the optional.
+    ///
+    /// It gates more than presentation. An inherited entitlement cannot be
+    /// detached from the license (`403 POLICY_ENTITLEMENT`), attaching it again
+    /// is refused (`422 ENTITLEMENT_ALREADY_INHERITED`), and
+    /// `TamgaClient.getEntitlement` returns `404` for it because the item route
+    /// resolves direct attachments only.
+    public let inherited: Bool?
 
     static func fromResource(_ resource: JSONAPIResource<EntitlementAttributes>) -> Entitlement {
         let attrs = resource.attributes
@@ -30,7 +42,8 @@ public struct Entitlement: Equatable, Sendable {
             code: attrs?.code,
             created: attrs?.created,
             updated: attrs?.updated,
-            metadata: attrs?.metadata
+            metadata: attrs?.metadata,
+            inherited: attrs?.inherited
         )
     }
 }
@@ -42,4 +55,6 @@ struct EntitlementAttributes: Decodable {
     let created: Date?
     let updated: Date?
     let metadata: [String: JSONValue]?
+    /// Emitted only by the license-scoped listing; absent elsewhere.
+    let inherited: Bool?
 }

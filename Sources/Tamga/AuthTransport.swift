@@ -7,9 +7,20 @@ import Foundation
 /// rather than replicating that fallback chain. `.licenseKey` is the right
 /// default for an embedded client.
 ///
-/// Credentials are sent on every request, including endpoints where the server
-/// does not enforce authentication today, so callers stay forward-compatible
-/// with enforcement landing.
+/// **Authentication is enforced server-side.** A missing or unusable credential
+/// is rejected; do not build client logic that assumes otherwise.
+///
+/// The license-key forms carry an extra precondition that is easy to mistake for
+/// a bad key: `.licenseKey` and `.basicLicenseKey` authenticate only when the
+/// license's policy sets `authentication_strategy` to `LICENSE` or `MIXED`. That
+/// column defaults to `'TOKEN'`, and `NONE` behaves like `TOKEN` at this gate, so
+/// **license-key auth is disabled unless a policy explicitly turns it on**.
+/// Otherwise every call fails with `401 LICENSE_NOT_ALLOWED`
+/// (`TamgaAPIErrorCode.licenseNotAllowed`), which is a policy configuration
+/// problem rather than something a client can retry its way out of. An expired
+/// license is separately refused with `401 LICENSE_EXPIRED` only under
+/// `expiration_strategy: REVOKE_ACCESS`; under the other three strategies it
+/// still authenticates and the expiry shows up as a validation verdict instead.
 ///
 /// **Tokens are opaque strings.** The server documents `tok-`/`prod-`/`env-`/
 /// `activ-`/`lic-` prefixes per token type, but every issued token currently

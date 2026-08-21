@@ -52,15 +52,26 @@ struct Transport: Sendable {
     /// second activation burning a second seat, and only the caller knows
     /// whether that is acceptable.
     ///
-    /// Matching is by suffix, not substring. `ping-heartbeat` and
-    /// `reset-heartbeat` therefore do **not** match `/actions/ping` -- only a
-    /// process ping does.
+    /// Matching is by suffix, not substring. `/actions/ping` therefore matches
+    /// only a process ping; the two machine heartbeat actions are listed
+    /// separately because their paths end differently.
+    ///
+    /// Both heartbeat actions are on the list. They are bare idempotent state
+    /// writes -- ping is an unconditional `last_heartbeat_at = NOW()` and reset
+    /// clears the same field -- so repeating one cannot burn a seat the way a
+    /// repeated create can. Excluding them, as this SDK previously did, meant a
+    /// throttled heartbeat was dropped silently and the machine was culled for
+    /// missing a window it had in fact tried to meet. That is a real risk here:
+    /// the server buckets rate limits per route pattern, so an entire fleet
+    /// shares one budget for `ping-heartbeat` and throttles itself.
     static let retryablePostSuffixes = [
         "/actions/validate",
         "/actions/validate-key",
         "/actions/check-in",
         "/actions/check-out",
-        "/actions/ping"
+        "/actions/ping",
+        "/actions/ping-heartbeat",
+        "/actions/reset-heartbeat"
     ]
 
     private let performer: any HTTPRequestPerforming

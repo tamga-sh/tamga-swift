@@ -50,9 +50,9 @@ public struct Machine: Equatable, Sendable {
     public let hostname: String?
     /// The machine's reported core count.
     public let cores: Int?
-    /// The machine's reported memory in bytes.
+    /// The machine's reported memory in **megabytes**, not bytes.
     public let memory: Int64?
-    /// The machine's reported disk in bytes.
+    /// The machine's reported disk in **megabytes**, not bytes.
     public let disk: Int64?
     /// When the next heartbeat is expected.
     public let nextHeartbeatAt: Date?

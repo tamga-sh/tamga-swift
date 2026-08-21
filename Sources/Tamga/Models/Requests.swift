@@ -3,9 +3,11 @@ import Foundation
 /// Options for registering a machine against a license. `fingerprint` and
 /// `licenseId` are required; everything else is optional.
 ///
-/// Machine, core, memory and disk limits are **not** checked at creation time.
-/// They surface only later, through validation -- see
-/// `TamgaClient.activateMachine`, which creates, validates, and rolls back.
+/// Machine, core, memory and disk limits are checked at creation time **and**
+/// again at validation; which one refuses an over-limit activation is decided by
+/// the policy's overage strategy, not by the caller. Use
+/// `TamgaClient.activateMachine`, which handles both paths and rolls back the
+/// one that leaves a row behind.
 public struct CreateMachineOptions: Equatable, Sendable {
     /// The machine fingerprint. Required.
     public var fingerprint: String
@@ -21,9 +23,17 @@ public struct CreateMachineOptions: Equatable, Sendable {
     public var platform: String?
     /// Reported core count, which validation checks against the policy limit.
     public var cores: Int?
-    /// Reported memory in bytes.
+    /// Reported memory in **megabytes**, which validation checks against the
+    /// policy limit.
+    ///
+    /// Not bytes. The column is documented as megabytes server-side and feeds
+    /// the licence's `machines_memory_count`, so reporting 16 GB as
+    /// `17179869184` inflates that running total by a factor of 1,048,576 and
+    /// trips `MEMORY_LIMIT_EXCEEDED` on the next activation against the same
+    /// licence.
     public var memory: Int64?
-    /// Reported disk in bytes.
+    /// Reported disk in **megabytes**, which validation checks against the
+    /// policy limit. Not bytes -- see `memory`.
     public var disk: Int64?
     /// Arbitrary metadata.
     public var metadata: [String: JSONValue]?
@@ -215,10 +225,14 @@ public struct ValidateOptions: Equatable, Sendable {
     }
 
     /// The request body, omitting an unset or empty scope entirely.
+    ///
+    /// Emptiness is judged on the **rendered** scope, not on `Scope.isEmpty`,
+    /// so a scope carrying only the two no-longer-sent fields (`version`,
+    /// `checksum`) drops out rather than being sent as a bare `{}`.
     var requestBody: JSONValue {
         var meta: [String: JSONValue] = ["skip_touch": .bool(skipTouch)]
-        if let scope, !scope.isEmpty {
-            meta["scope"] = scope.requestValue
+        if let scope, case .object(let rendered) = scope.requestValue, !rendered.isEmpty {
+            meta["scope"] = .object(rendered)
         }
         return .object(["meta": .object(meta)])
     }

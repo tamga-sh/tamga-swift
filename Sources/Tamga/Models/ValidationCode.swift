@@ -7,7 +7,7 @@ import Foundation
 /// field is human-readable text whose wording may change between server
 /// versions -- never match on it.
 ///
-/// All 24 wire values are modeled for schema completeness, but **only 14 are
+/// All 24 wire values are modeled for schema completeness, but **only 16 are
 /// reachable** against the server today; `isReachable` reports which. Do not
 /// build product behaviour on an unreachable one. An unrecognized value decodes
 /// to `.unknown` rather than failing, so a server-side addition can never break
@@ -49,7 +49,10 @@ public enum ValidationCode: Equatable, Sendable {
     case notFound
     /// Unreachable: declared in the server's enum, never emitted.
     case banned
-    /// Unreachable: declared in the server's enum, never emitted.
+    /// Reachable. `scope.entitlements` was set and the licence does not hold
+    /// every code in it. Codes are compared case-insensitively after
+    /// de-duplication, and both directly attached and policy-inherited
+    /// entitlements satisfy the check.
     case entitlementsMissing
     /// Unreachable: declared in the server's enum, never emitted.
     case tooManyUsers
@@ -57,13 +60,16 @@ public enum ValidationCode: Equatable, Sendable {
     case heartbeatDead
     /// Unreachable: declared in the server's enum, never emitted.
     case heartbeatNotStarted
-    /// Unreachable: `scope.fingerprint` is parsed server-side but never checked.
+    /// Reachable. `scope.fingerprint` was set and matched no machine on the
+    /// licence. Heartbeat status is not considered.
     case fingerprintScopeMismatch
     /// Unreachable: declared in the server's enum, never emitted.
     case componentsScopeMismatch
-    /// Unreachable: `scope.checksum` is parsed server-side but never checked.
+    /// Unreachable: sending `scope.checksum` now fails the whole call with
+    /// `422 SCOPE_NOT_SUPPORTED` instead, so this verdict is never reached.
     case checksumScopeMismatch
-    /// Unreachable: `scope.version` is parsed server-side but never checked.
+    /// Unreachable: sending `scope.version` now fails the whole call with
+    /// `422 SCOPE_NOT_SUPPORTED` instead, so this verdict is never reached.
     case versionScopeMismatch
 
     /// A code this SDK release does not recognize, carrying the raw wire value.
@@ -122,7 +128,8 @@ public enum ValidationCode: Equatable, Sendable {
         case .valid, .suspended, .expired, .overdue,
              .productScopeMismatch, .policyScopeMismatch, .userScopeMismatch,
              .environmentScopeMismatch, .tooManyMachines, .tooManyCores,
-             .tooMuchMemory, .tooMuchDisk, .tooManyProcesses, .tooManyUses:
+             .tooMuchMemory, .tooMuchDisk, .tooManyProcesses, .tooManyUses,
+             .entitlementsMissing, .fingerprintScopeMismatch:
             return true
         default:
             return false
@@ -131,6 +138,9 @@ public enum ValidationCode: Equatable, Sendable {
 
     /// Whether this code means a policy limit was exceeded, which is the set
     /// that triggers `TamgaClient.activateMachine`'s rollback.
+    ///
+    /// The create endpoints name the same five limits differently -- see
+    /// `TamgaAPIErrorCode.limitValidationCodes`, which maps those onto these.
     public var isOverLimit: Bool {
         switch self {
         case .tooManyMachines, .tooManyCores, .tooMuchMemory, .tooMuchDisk, .tooManyProcesses:
