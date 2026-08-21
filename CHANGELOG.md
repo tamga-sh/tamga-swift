@@ -1,5 +1,20 @@
 # Changelog
 
+## [1.3.0](https://github.com/tamga-sh/tamga-swift/compare/v1.2.1...v1.3.0) (2026-08-21)
+
+
+### Features
+
+* document key rotation and the cookie transport's Origin ([b1a722f](https://github.com/tamga-sh/tamga-swift/commit/b1a722f9ab031c0a1fcbb7591af1b8bc7ecebb2c))
+* kid-aware verification and a session cookie that authenticates ([758880f](https://github.com/tamga-sh/tamga-swift/commit/758880f5df2e422ecdae1ff14450a6178caa11fa))
+* send the Origin that makes session-cookie auth authenticate ([7d88038](https://github.com/tamga-sh/tamga-swift/commit/7d880388897c17bf404ca2b4531511adce6c725e))
+* tell a rotated signing key apart from a forged file ([d3e1687](https://github.com/tamga-sh/tamga-swift/commit/d3e1687da30a3c98a28910c2e3e56bf4773b2533))
+
+
+### Bug Fixes
+
+* let release-please manage sdkVersion, which the User-Agent sends ([#24](https://github.com/tamga-sh/tamga-swift/issues/24)) ([bfa8aa2](https://github.com/tamga-sh/tamga-swift/commit/bfa8aa20ece579f546365e318151194d07497eb6))
+
 ## [1.2.1](https://github.com/tamga-sh/tamga-swift/compare/v1.2.0...v1.2.1) (2026-08-21)
 
 
