@@ -108,7 +108,14 @@ let package = Package(
             // of the wire format on both sides and kept CI green while no SDK
             // could open anything the server actually emitted. See
             // Tests/TamgaTests/Fixtures/MachineFiles/PROVENANCE.md.
-            resources: [.copy("Fixtures/MachineFiles")]
+            resources: [
+                .copy("Fixtures/MachineFiles"),
+                // The shared fingerprint vectors, byte-identical to the copy
+                // every other SDK in the fleet tests against. Copied in so the
+                // suite runs offline, and NOT generated here: a vector an SDK
+                // produced can only prove that SDK agrees with itself.
+                .copy("Fixtures/Fingerprint")
+            ]
         ),
     ] + objcTargets
 )

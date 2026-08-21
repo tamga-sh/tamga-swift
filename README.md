@@ -69,6 +69,51 @@ func activate(licenseFile pem: String, licenseKey: String, publicKey: Data) {
 failure is a case of [`TamgaCheckoutError`](Sources/Tamga/Errors.swift); nothing here silently
 returns an unverified `License`.
 
+## Fingerprint canonicalisation
+
+The server stores `fingerprint TEXT NOT NULL` with no length limit, no `CHECK` and no
+normalisation, unique per `(license_id, fingerprint)`. So `"ABC-123"`, `"abc-123"` and
+`" ABC-123 "` are three machines occupying three seats on one license. `TamgaFingerprint` collapses
+the differences that are accidents of formatting, and only those:
+
+```swift
+let fingerprint = try TamgaFingerprint.compute([
+    .init(label: "machine-id", value: machineId),
+    .init(label: "disk", value: diskSerial)
+])
+let machine = try await client.activateMachine(
+    licenseId: licenseId, options: .init(fingerprint: fingerprint))
+```
+
+The rule, identical in all eight SDKs:
+
+```text
+canonical   = "tamga-fingerprint-v1" <US> join(<US>, sort_bytewise(["label=value"]))
+fingerprint = lowercase_hex(SHA-256(UTF-8(canonical)))     // 64 characters
+```
+
+`<US>` is U+001F. Component order does not matter (they are sorted). Surrounding ASCII whitespace
+is trimmed from values. Labels must be non-empty ASCII printable `0x21`–`0x7E` without `=`; values
+may contain `=`, non-ASCII text, or nothing at all.
+
+Three things it deliberately does **not** do, each of which throws or is documented rather than
+being quietly applied:
+
+- **No Unicode normalisation.** Foundation offers `precomposedStringWithCanonicalMapping` and using
+  it here would be one line. It is left out because NFC needs a new dependency in Rust and Go and
+  ICU or hand-rolled tables in C11 — and a rule eight ports cannot implement identically is worse
+  than no rule, because it would give one machine two fingerprints depending on which SDK the app
+  was written in. **If your values can arrive in more than one normal form, normalise them
+  yourself before calling.**
+- **No case folding.** Lowercasing a base64 or hex identifier corrupts it.
+- **No repair.** An empty label, a duplicate label, a non-ASCII label, a control character in a
+  value, or an empty component list all throw
+  [`TamgaFingerprintError`](Sources/Tamga/Fingerprint.swift). Stripping a control character instead
+  would map two different inputs onto one seat.
+
+`TamgaFingerprint.canonical(_:)` returns the pre-hash string, which is worth logging when two
+machines disagree — a 64-character hash says nothing about which component differed.
+
 ## Offline verification
 
 ### License files (`.lic`)
@@ -291,8 +336,11 @@ deliberate boundaries, not oversights.
 
 **Left to your application**
 
-- **Machine fingerprints.** No SDK in the fleet generates one. Producing a stable, device-specific,
-  reasonably tamper-resistant fingerprint — and keeping it stable across reinstalls — is yours.
+- **Machine fingerprints.** No SDK in the fleet *generates* one — choosing what identifies a
+  machine is a product decision, not a library one (a cloned VM template shares its hardware ids, a
+  container has none, a replaced motherboard changes them). Producing stable, device-specific
+  components is still yours. Turning them into one canonical string is not: see
+  [Fingerprint canonicalisation](#fingerprint-canonicalisation).
 - **Embedding the account public key.** Rotation and key-id handling are no longer yours: pass a
   `[TamgaSigningKey]` to the offline verifiers and they select the key the file names. See
   [Key rotation](#key-rotation).
