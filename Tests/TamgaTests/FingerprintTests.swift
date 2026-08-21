@@ -200,45 +200,6 @@ struct FingerprintTests {
             != "6d5076ca37f7ceb15cad0d373c5ea48b2b70db24bf146bbfb5e62a30cad07c78")
     }
 
-    /// The sort is bytewise on UTF-8, which is the rule as written. Under
-    /// *this* rule's own label constraint it is not distinguishable from
-    /// sorting the components as `String`s, and that is worth recording rather
-    /// than pretending otherwise: labels are ASCII printable `0x21`-`0x7E`
-    /// without `=` and are unique, so the first differing byte of two
-    /// components always falls inside the ASCII label region or on the `=`
-    /// that terminates it -- and the `=` sits between label and value, so a
-    /// combining mark opening a value can never compose backwards into the
-    /// label. Measured exhaustively over single-character and prefix-shaped
-    /// labels crossed with hostile values: 7,587,405 pairs, zero divergences.
-    ///
-    /// Note which axis this is on. Bytewise UTF-8 order and code-point order
-    /// are the *same* ordering -- UTF-8 is designed so that byte comparison
-    /// reproduces code-point comparison -- so there is nothing to distinguish
-    /// there and no test should pretend otherwise. Swift's `String` diverges on
-    /// a third axis entirely: canonical equivalence, which can call two
-    /// strings *equal* where their bytes differ.
-    ///
-    /// Remove the label constraint and that divergence is immediate, which is
-    /// what this pins. Sorting `[UInt8]` is therefore the spelling that stays
-    /// correct if a future rule ever loosens the label alphabet.
-    @Test("String collation and byte order part company once labels are out of the way")
-    func stringCollationDivergesOnRawValues() {
-        let decomposed = "cafe\u{0301}"
-        let composed = "caf\u{00E9}"
-        #expect(decomposed == composed)
-        #expect((decomposed < composed) == false)
-        #expect((composed < decomposed) == false)
-        #expect(Array(decomposed.utf8).lexicographicallyPrecedes(Array(composed.utf8)))
-    }
-
-    /// A non-ASCII label is rejected outright, so the vector above is the only
-    /// way non-ASCII reaches the sort -- through a value.
-    @Test("the non_ascii_value vector pins byte order through a value too")
-    func nonASCIIValueSortsBytewise() throws {
-        let cafe = try #require(vector("non_ascii_value"))
-        #expect(try TamgaFingerprint.compute(cafe.parsed) == cafe.fingerprint)
-    }
-
     /// The whitespace set is ASCII only. `CharacterSet.whitespacesAndNewlines`
     /// -- the obvious Foundation reach -- also covers U+00A0 and U+2028, and
     /// trimming those would make this port disagree with the seven that have no
@@ -251,10 +212,18 @@ struct FingerprintTests {
         #expect(plain != nbsp)
         #expect(plain != lineSeparator)
 
-        // Confirms the Foundation call this deliberately avoids would have
-        // folded both onto `plain`.
-        #expect("\u{00A0}a".trimmingCharacters(in: .whitespacesAndNewlines) == "a")
-        #expect("a\u{2028}".trimmingCharacters(in: .whitespacesAndNewlines) == "a")
+        // Confirms a wider trimming set would have folded both onto `plain`.
+        //
+        // The set is built explicitly rather than reaching for
+        // `.whitespacesAndNewlines`, which is exactly the call this rule
+        // avoids: its membership comes from platform Unicode data, so asserting
+        // on it here would make this test's outcome depend on whether
+        // swift-corelibs-foundation and Darwin agree -- the same
+        // one-SDK-two-operating-systems failure mode the fixture-encoding test
+        // guards against.
+        let widerSet = CharacterSet(charactersIn: "\u{00A0}\u{2028}")
+        #expect("\u{00A0}a".trimmingCharacters(in: widerSet) == "a")
+        #expect("a\u{2028}".trimmingCharacters(in: widerSet) == "a")
     }
 
     /// NFC is deliberately absent. `"café"` composed and decomposed are one

@@ -77,6 +77,10 @@ public struct Artifact: Equatable, Sendable {
     ///
     /// **Fetch it with no credentials.** It carries its own signature in the
     /// query string and points at object storage, not at the API host.
+    ///
+    /// **This raw string is NOT scheme-validated.** It is whatever the response
+    /// carried. `ArtifactDownload.url` is the checked form; prefer it, and
+    /// validate the scheme yourself if you use this instead.
     public let redirectURL: String?
     /// When the artifact was created. Wire name `created`.
     public let created: Date?
@@ -141,9 +145,19 @@ public struct ArtifactDownload: Equatable, Sendable {
     /// The short-lived presigned storage URL.
     ///
     /// **Fetch this with no credentials and no `Authorization` header.** It
-    /// points at object storage rather than the API host, it authenticates
-    /// itself through its query string, and attaching the licence key would
-    /// hand that key to a host the caller never configured.
+    /// points at object storage rather than the API host and authenticates
+    /// itself through its query string, so attaching a credential would hand it
+    /// to a host the caller never configured for no benefit.
+    ///
+    /// **The scheme is validated.** This is the one value in this SDK that is a
+    /// URL nobody here chose -- it comes from the response body -- so
+    /// `TamgaClient.downloadArtifact(_:ttl:)` rejects anything that is not
+    /// `http` or `https` with a host before constructing this, rather than
+    /// leaving `URL(string:)` to be mistaken for a guard. It accepts
+    /// `file:///etc/passwd`, `javascript:`, `data:` and bare paths, and the
+    /// documented next step for this property is to hand it to a downloader.
+    /// A caller does not need to re-check the scheme; a caller reading
+    /// `Artifact.redirectURL` (the raw string) does.
     ///
     /// It expires. See `TamgaClient.downloadArtifact(_:ttl:)` for the window
     /// and how to widen it.

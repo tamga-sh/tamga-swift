@@ -88,9 +88,9 @@ let (fileURL, _) = try await URLSession.shared.download(from: download.url)
 ```
 
 **The URL is fetched by you, without credentials, and that is the whole design.** The route's
-default answer is a `303 See Other` pointing at object storage; following it with this client's
-`Authorization` header still attached would hand your license key to the storage host. So
-`downloadArtifact` asks for `?redirect=false` and gets the presigned URL back in the body instead.
+default answer is a `303 See Other` pointing at object storage. This SDK refuses redirects outright,
+so `downloadArtifact` asks for `?redirect=false` and gets the presigned URL back in the body
+instead — no 3xx is generated at all, which holds regardless of which HTTP client you inject.
 The URL authenticates itself through its query string and needs no header of yours. Nothing is
 streamed through the SDK — a real installer routinely exceeds the client's 32 MiB response cap, and
 `Artifact.checksum` is yours to verify against the bytes you receive.
@@ -107,6 +107,16 @@ Listing does not apply that gate, so a listable artifact is not necessarily a do
 
 `Artifact.redirectURL` is `nil` on list and show — the server omits the key there. Use
 `downloadArtifact`, which returns the URL parsed and non-optional.
+
+**The URL's scheme is validated for you.** `redirectUrl` is the one value in this SDK that is a URL
+nobody here chose, and `URL(string:)` is not a guard: it accepts `file:///etc/passwd` (reporting
+`isFileURL == true`), `javascript:`, `data:`, `ftp:`, the bare path `/etc/passwd`, and
+`C:\Windows\x` with the scheme `"C"`. Since the documented next step is to hand the result to
+`URLSession.download(from:)`, a `file:` URL surviving that far is a local-file read at a path the
+response body chose. `downloadArtifact` therefore requires `http` or `https` (case-insensitively —
+`URL` does not normalise the scheme) plus a host, and throws `TamgaError.malformedResponse`
+otherwise. The raw `Artifact.redirectURL` string is **not** checked; validate it yourself if you
+use it instead of `ArtifactDownload.url`.
 
 ## Fingerprint canonicalisation
 
@@ -522,10 +532,25 @@ deliberate boundaries, not oversights.
 **Transport hardening**
 
 - **Redirects are refused.** The API never legitimately redirects on a route this SDK calls, and a
-  3xx can carry credentials to a host you never configured — the session-cookie form especially,
-  which no framework-level stripping protects. The one route that *does* redirect by default is
-  the artifact download, and `downloadArtifact` asks it not to; see
-  [Release artifacts](#release-artifacts).
+  3xx can carry credentials to a host you never configured.
+
+  Measured on `URLSession` against a loopback server with the refusal disabled: the follow-up
+  request is rebuilt *without* the original `Authorization` header, cross-origin **and**
+  same-origin, so `.licenseKey`, `.bearer` and the `basic*` forms are already protected by the
+  framework and `.queryParameter` is displaced by the target's own query string. **`.sessionCookie`
+  is the exception** — it is a manually-set `Cookie` header with `httpShouldSetCookies` disabled,
+  nothing strips it, and it reached a different-origin target intact. That one form is what this
+  refusal actually protects.
+
+  Across this SDK fleet the leaking credential differs by runtime — `URLSession` and .NET's
+  `HttpClient` strip `Authorization` on every hop, while the Fetch standard strips it cross-origin
+  only, and a directly-set `Cookie` forwards on all three. There is no general rule to lean on, so
+  refusing outright is the only policy that does not depend on which header a platform happens to
+  protect.
+
+  The one route that *does* redirect by default is the artifact download, and `downloadArtifact`
+  asks it not to, so no 3xx is generated at all — a property of the request rather than of
+  whichever HTTP client you inject. See [Release artifacts](#release-artifacts).
 - **Response bodies are capped at 32 MiB, enforced during the transfer.** A response that declares
   more than the cap is refused before any body arrives, and one that declares nothing is cut off the
   moment the running total crosses it. A timeout bounds how long a response may take, not how large

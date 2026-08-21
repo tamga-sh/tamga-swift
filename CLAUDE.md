@@ -223,15 +223,26 @@ specification covers the full set, including analytics/EE items that don't touch
   `tamga-api@e6d317b`) nor a route. Three routes: `GET /releases/{release_id}/artifacts` (keyset, real `(created_at, id)`
   seek, so `synthesizeCursor` is sound here unlike for entitlements), `GET /artifacts/{id}`, and
   `GET /artifacts/{id}/actions/download`. Three things to keep straight:
-  1. **The download answers `303 See Other`** to a presigned storage URL by default. Following it
-     with the `Authorization` header attached hands the licence key to the storage host, so
+  1. **The download answers `303 See Other`** to a presigned storage URL by default, so
      `downloadArtifact` sends `?redirect=false` and gets the resource back with `redirectUrl`
-     populated instead. The `URLSession` layer refuses redirects anyway
+     populated instead — no 3xx is generated at all, which holds whatever `HTTPRequestPerforming`
+     a caller injected. The `URLSession` layer refuses redirects anyway
      (`SessionPolicyDelegate.urlSession(_:task:willPerformHTTPRedirection:…)` →
      `completionHandler(nil)`), verified against a real socket for `303` specifically with the
-     redirect target asserted to have accepted zero connections. The returned URL must be fetched
-     with **no** credentials, and not through `Transport` — a real artifact routinely exceeds the
-     32 MiB response cap.
+     target asserted to have accepted zero connections. **Do not restate the folk rule that a
+     redirect leaks `Authorization` — measured here, it does not.** With the refusal disabled,
+     URLSession rebuilds the follow-up without the original `Authorization`, cross-origin *and*
+     same-origin, and `.queryParameter` is displaced by the target's own query string.
+     `.sessionCookie` is the sole leak: a manually-set `Cookie` header, `httpShouldSetCookies`
+     false, nothing strips it, arrived at another origin intact. The regression test uses that
+     form for exactly this reason. Fleet-wide the leaking credential differs by runtime
+     (URLSession and .NET `HttpClient` strip `Authorization` on both hops; fetch strips it
+     cross-origin only; a directly-set `Cookie` forwards on all three), so refusing outright is
+     the only policy not contingent on the platform.
+     `redirectUrl`'s scheme is validated to `http`/`https` + host before it becomes
+     `ArtifactDownload.url` — `URL(string:)` accepts `file:`, `javascript:`, `data:`, bare paths
+     and `C:\...`, and does not normalise the scheme's case. The returned URL must be fetched with **no** credentials and
+     not through `Transport` — a real artifact routinely exceeds the 32 MiB response cap.
   2. **`ArtifactAttributes` is `rename_all = "camelCase"` AND carries explicit
      `#[serde(rename = "created")]`/`"updated"`** (`artifacts/serializer.rs:20,34-37`). So the wire
      is `redirectUrl` but `created`/`updated` — **not** `createdAt`/`updatedAt`. The shared decoder's
@@ -239,7 +250,11 @@ specification covers the full set, including analytics/EE items that don't touch
      `CodingKeys`; adding them would compare a snake_case `stringValue` against the already-converted
      key and decode `nil`, which is the bug `MachineAttributes` shipped. Measured side effect of
      leaving them off: `redirect_url` decodes too, so a server-side rename either way is a non-event.
-  3. **A `403` on download is not necessarily an auth misconfiguration.** The handler runs
+  3. A bad `ttl` answers `PRESIGN_TTL_INVALID` (`artifacts/service.rs:33`), **not** the
+     `TTL_INVALID` the two checkout routes use (`check_out_license.rs:48`,
+     `check_out_machine.rs:50`). Both are exposed as `TamgaAPIErrorCode` constants; a handler
+     written against one will not match the other.
+  4. **A `403` on download is not necessarily an auth misconfiguration.** The handler runs
      `releases::service::enforce_release_access` after the permission check, so the product's
      distribution strategy, licence suspension, licence expiry under the policy's
      `expirationStrategy`, and release entitlement each answer `403` to a caller that does hold

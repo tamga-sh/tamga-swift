@@ -141,24 +141,33 @@ public enum TamgaFingerprint {
             encoded.append((bytes: Array(text.utf8), text: text))
         }
 
-        // Bytewise ascending on the UTF-8 bytes, NOT `String`'s `<`.
+        // Bytewise ascending on the UTF-8 bytes. This is the spelling of the
+        // rule as the shared spec states it, and it is deliberately NOT backed
+        // by a test, because for valid input it cannot fail.
         //
-        // Swift compares strings by Unicode canonical equivalence, so `<` on
-        // `String` is neither byte order nor code-point order: it calls
-        // `"cafe\u{0301}"` and `"caf\u{00E9}"` *equal* where their bytes
-        // differ. Comparing `[UInt8]` is what the rule actually says.
+        // Two things that get conflated here, both worth stating once:
         //
-        // Honest caveat, because it was measured rather than assumed: under
-        // this rule's own label constraint the two orderings cannot actually
-        // diverge. Labels are ASCII printable 0x21-0x7E without `=` and are
-        // unique, so the first differing byte of any two components lands
-        // inside the ASCII label region or on the `=` terminating it, and that
-        // `=` blocks a combining mark opening a value from composing backwards
-        // into the label. 7,587,405 pairs of the shape this produces --
-        // exhaustive over single-character and prefix-shaped labels crossed
-        // with hostile values -- gave zero disagreements. So this spelling is
-        // not load-bearing today; it becomes load-bearing the moment a v2 rule
-        // loosens the label alphabet, and it is what the shared spec says.
+        // - Bytewise UTF-8 order and code-point order are the *same* ordering.
+        //   UTF-8 is designed so byte comparison reproduces code-point
+        //   comparison, so there is nothing to distinguish and no vector should
+        //   claim to. Swift's `String` `<` diverges on a third axis --
+        //   canonical equivalence, which calls `"cafe\u{0301}"` and
+        //   `"caf\u{00E9}"` *equal* where their bytes differ.
+        //
+        // - That divergence is unreachable through this rule. Labels are ASCII
+        //   printable 0x21-0x7E without `=` and are unique, so the first
+        //   differing byte of any two components always lands inside the ASCII
+        //   label region or on the `=` terminating it -- a value's bytes never
+        //   decide the order -- and on ASCII, canonical equivalence and byte
+        //   order agree. Measured here over 7,587,405 valid pairs, and by
+        //   tamga-js over 8,732,016: zero disagreements in both. Replacing this
+        //   with `sort { $0.text < $1.text }` leaves every test green, and a
+        //   test written to "catch" that would be a green test proving nothing.
+        //
+        // Kept as bytes because it is what the spec says and it stays correct
+        // if a v2 rule ever loosens the label alphabet. What IS pinned, because
+        // it does bite: the sort key is the whole `label=value` component
+        // rather than the label alone, and the comparison is case-sensitive.
         encoded.sort { $0.bytes.lexicographicallyPrecedes($1.bytes) }
 
         return ([version] + encoded.map(\.text)).joined(separator: separator)

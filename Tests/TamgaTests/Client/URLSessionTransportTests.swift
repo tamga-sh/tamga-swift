@@ -36,16 +36,25 @@ struct URLSessionTransportTests {
 
     /// The artifact download route answers `303 See Other`, not `302`, and the
     /// two are not interchangeable to `URLSession` -- a `303` rewrites the
-    /// follow-up to `GET`, which is precisely the shape that would sail
-    /// through unnoticed. The redirect target here is a second real server, so
-    /// "was not followed" is asserted as "was never contacted" rather than
-    /// inferred from the status that came back.
+    /// follow-up to `GET`, which is precisely the shape that would sail through
+    /// unnoticed. The redirect target here is a second real server, so "was not
+    /// followed" is asserted as "was never contacted" rather than inferred from
+    /// the status that came back.
     ///
-    /// `TamgaClient.downloadArtifact(_:ttl:)` asks for `?redirect=false` and so
-    /// never provokes this, but the refusal is what makes that a design choice
-    /// rather than the only thing standing between a licence key and a storage
-    /// host.
-    @Test("a 303 to another host is refused, and that host is never contacted")
+    /// **The credential is `.sessionCookie` on purpose, and that is the whole
+    /// point of this test.** Measured against these same loopback servers with
+    /// the refusal disabled: `URLSession` rebuilds a redirect's follow-up
+    /// request *without* the original `Authorization` header, cross-origin and
+    /// same-origin alike, so `.licenseKey`, `.bearer` and the `basic*` forms
+    /// never reach the target and `.queryParameter` is displaced by the target's
+    /// own query string. `.sessionCookie` is a manually-set `Cookie` header
+    /// with `httpShouldSetCookies` false, nothing strips it, and it arrived at
+    /// the other origin intact.
+    ///
+    /// So this refusal protects exactly one credential form. Testing it with a
+    /// licence key would have passed for the wrong reason and left someone free
+    /// to conclude the guard was redundant.
+    @Test("a 303 to another host is refused, and the cookie credential never reaches it")
     func seeOtherIsRefusedAndTargetIsNeverContacted() async throws {
         guard let storage = LoopbackServer(behaviour: .body(declaredLength: 2, actualBytes: 2))
         else {
@@ -63,7 +72,7 @@ struct URLSessionTransportTests {
         }
         defer { api.stop() }
 
-        let client = TamgaClient(accountId: "acct-123", auth: .licenseKey("lic-secret"),
+        let client = TamgaClient(accountId: "acct-123", auth: .sessionCookie("sess-secret"),
                                  host: api.baseURL, timeout: 10)
 
         do {
