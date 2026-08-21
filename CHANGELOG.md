@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.3.1](https://github.com/tamga-sh/tamga-swift/compare/v1.3.0...v1.3.1) (2026-08-21)
+
+
+### Bug Fixes
+
+* keep the install snippet's version current at release ([6ce159b](https://github.com/tamga-sh/tamga-swift/commit/6ce159b667de99509c2935b69dce9b8b356a4889))
+* keep the install snippet's version current at release ([630f433](https://github.com/tamga-sh/tamga-swift/commit/630f433dafbf7c66157716f4854224cb92c6ad2b))
+
 ## [1.3.0](https://github.com/tamga-sh/tamga-swift/compare/v1.2.1...v1.3.0) (2026-08-21)
 
 
