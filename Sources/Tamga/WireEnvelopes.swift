@@ -37,3 +37,10 @@ struct CheckoutFileAttributes: Decodable {
     let expiry: String?
     let issued: String?
 }
+
+/// `{"data": [<resource>, ...], "meta": {"page": {...}}}` -- the offset-paginated
+/// list shape, which only the machine collection uses.
+struct ListPageEnvelope<Attributes: Decodable>: Decodable {
+    let data: [JSONAPIResource<Attributes>]
+    let meta: PageMetaBlock?
+}
