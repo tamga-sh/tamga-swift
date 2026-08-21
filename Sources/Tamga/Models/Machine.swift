@@ -1,9 +1,10 @@
 import Foundation
 
-/// A machine's heartbeat state. GOTCHA: the 600s (10 min) heartbeat window is
-/// hardcoded server-side, NOT driven by `policy.heartbeat_duration` -- a
-/// future heartbeat-scheduler helper must not derive its ping interval from
-/// that field.
+/// A machine's heartbeat state. GOTCHA: the heartbeat window is
+/// `policy.heartbeat_duration`, and 600s (10 min) is only the fallback the
+/// server applies when that field is null. `HeartbeatScheduler` sizes its
+/// default interval against the 600s fallback and never reads the policy, so a
+/// policy with a shorter window needs an explicit interval passed in.
 public enum HeartbeatStatus: String, Equatable, Sendable {
     /// Wire value `NOT_STARTED` -- never pinged.
     case notStarted = "NOT_STARTED"
@@ -65,7 +66,11 @@ public struct Machine: Equatable, Sendable {
     public let memory: Int64?
     /// The machine's reported disk in **megabytes**, not bytes.
     public let disk: Int64?
-    /// When the next heartbeat is expected.
+    /// When the next heartbeat is expected. On `createMachine`,
+    /// `activateMachine`, `pingHeartbeat` and `resetHeartbeat` this is
+    /// `lastHeartbeatAt` plus the **600s fallback**, not the policy's window:
+    /// those routes return the written row without the policy joined in. Only
+    /// `checkOutMachine` and `generateOfflineProof` read it off the policy.
     public let nextHeartbeatAt: Date?
     /// When the machine was registered.
     public let created: Date?

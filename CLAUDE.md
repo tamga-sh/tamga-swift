@@ -247,10 +247,19 @@ specification covers the full set, including analytics/EE items that don't touch
   silently treats both as the "no restriction" variant (`NO_OVERAGE`/`NO_REVIVE`). Decoders here
   must not crash on these strings, and must not invent fake enum cases that imply restrictive
   behavior the server doesn't actually have.
-- **Heartbeat windows are hardcoded, not policy-driven.** Machine heartbeat window is a hardcoded
-  600s regardless of `policy.heartbeat_duration`; process heartbeat window is a hardcoded 30s with
-  no resurrection grace period at all. Any heartbeat-scheduler helper in this SDK should derive its
-  ping interval from these hardcoded constants, not from a policy value that the server ignores.
+- **The machine heartbeat window is policy-driven; only the process window is hardcoded.** The
+  machine window is `policy.heartbeat_duration`, with 600s as the fallback for a null column —
+  `Policy::effective_heartbeat_duration_secs` and the cull job's `COALESCE(p.heartbeat_duration,
+  600)` agree on that, and `heartbeat_status`/`next_heartbeat_at` are both computed from it. The
+  process heartbeat window really is a hardcoded 30s, with no resurrection grace period at all.
+  `HeartbeatScheduler.window`/`defaultInterval` are still sized against the 600s fallback and
+  nothing here reads the policy, so on a policy with a shorter window the default ping rate is too
+  slow and machines report `DEAD`. Making the scheduler adapt needs a `getPolicy`/`getMachine` this
+  SDK does not expose yet; until then a caller on such a policy has to pass its own interval. No
+  field here carries the window outright, and `Machine.nextHeartbeatAt` only half-substitutes:
+  `create`, `ping-heartbeat` and `reset-heartbeat` return the written row without the policy join,
+  so there it is `last_heartbeat_at + 600s` whatever the policy says. Only check-out and
+  offline-proof, which read through `find_by_id`, derive it from the policy.
 - **`DEAD` does not mean the row was culled, and on a default policy nothing is ever culled.**
   `require_heartbeat` defaults to `FALSE`, the cull job early-returns for any policy that does not
   set it, and `Machine::heartbeat_status*` never consults the flag at all — it reports `DEAD` purely

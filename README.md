@@ -234,7 +234,12 @@ deliberate boundaries, not oversights.
   policy's overage strategy decides which one refuses. `activateMachine` handles both: a
   create-time `422` throws `machineOverLimit` with nothing to roll back, and an overage-path
   rejection deletes the row it created.
-- **The heartbeat window is a hardcoded 600s**, not driven by `policy.heartbeat_duration`.
+- **The heartbeat window is `policy.heartbeat_duration`, and 600s is only the fallback** the
+  server applies when the policy leaves that field null. `HeartbeatScheduler.window` and the
+  `defaultInterval` derived from it are both computed against the 600s fallback, and the scheduler
+  never reads the policy, so on a policy with a shorter window the default ping rate is too slow and
+  machines will report `.dead`. Callers on such a policy must pass their own `interval`, sized
+  against a window this SDK cannot report back to them: it exposes no `getPolicy`/`getMachine`.
 - **`.dead` does not mean the machine is gone.** It means only that the last ping is older than the
   window. Culling is gated on the policy's `requireHeartbeat`, which is off by default, so on a
   default policy the row and its seat stay put however long the machine reports `.dead`, and the

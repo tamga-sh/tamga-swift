@@ -2,10 +2,17 @@ import Foundation
 
 /// Pings a machine's heartbeat on a timer.
 ///
-/// The server's heartbeat window is a **hardcoded 600 seconds**, not driven by
-/// the policy's `heartbeat_duration` despite that field existing.
-/// `defaultInterval` is a third of the window, which tolerates two consecutive
-/// failed pings before the machine reports `.dead`.
+/// The server's heartbeat window is the policy's `heartbeat_duration`, falling
+/// back to **600 seconds** only when that field is null.
+///
+/// **This scheduler assumes the fallback.** `window` is the 600s fallback and
+/// `defaultInterval` is a third of it, which tolerates two consecutive failed
+/// pings only on a policy that takes the fallback. Nothing here reads the
+/// policy -- the SDK exposes no `getPolicy`/`getMachine` to read it with -- so
+/// on a policy with a shorter window the default rate is too slow and the
+/// machine will report `.dead`. Such a caller must pass an explicit `interval`
+/// under a third of its own window -- a window this SDK cannot report, since it
+/// exposes no `getPolicy`/`getMachine`.
 ///
 /// **`.dead` does not mean the machine was culled.** It means only that the
 /// last ping is older than the window. The status is computed from
@@ -32,10 +39,13 @@ import Foundation
 /// **Handle the tick callback.** It is the only way to observe a ping failing,
 /// and errors are reported rather than swallowed for that reason.
 public actor HeartbeatScheduler {
-    /// The server's hardcoded machine heartbeat window.
+    /// The server's **fallback** machine heartbeat window, applied when the
+    /// policy leaves `heartbeat_duration` null. A policy that sets that field
+    /// overrides this, and nothing here observes the override.
     public static let window: TimeInterval = 600
 
-    /// A third of `window`, leaving room for two consecutive failures.
+    /// A third of `window`, leaving room for two consecutive failures -- on a
+    /// policy that takes the 600s fallback. See the type's note for the rest.
     public static let defaultInterval: TimeInterval = window / 3
 
     private let client: TamgaClient
@@ -115,10 +125,10 @@ public actor HeartbeatScheduler {
 
 /// Pings a process's heartbeat on a timer.
 ///
-/// The process window is a **hardcoded 30 seconds** -- far shorter than a
-/// machine's 600 -- and has no resurrection grace period at all: once a process
-/// misses its window the row is deleted outright rather than being marked dead
-/// and revivable.
+/// The process window is a **hardcoded 30 seconds** -- far shorter than even
+/// a machine's 600s fallback -- and has no resurrection grace period at all:
+/// once a process misses its window the row is deleted outright rather than
+/// being marked dead and revivable.
 ///
 /// That makes the tick callback more important here than for machines. A failed
 /// ping is much closer to losing the process registration entirely, and the

@@ -235,9 +235,12 @@ public struct Policy: Equatable, Sendable {
     public let maxUses: Int?
     /// The license duration in seconds, or `nil` when perpetual.
     public let duration: Int64?
-    /// `policy.heartbeat_duration`. **Do not derive a ping interval from
-    /// this.** The server ignores it: the machine heartbeat window is a
-    /// hardcoded 600 seconds.
+    /// `policy.heartbeat_duration`, the machine heartbeat window in seconds.
+    /// The server honours it and falls back to 600 only when it is null, so
+    /// this -- not the fallback -- is what a ping interval should be sized
+    /// against. `HeartbeatScheduler` does not do that: its `defaultInterval`
+    /// is computed against the 600s fallback, so a policy setting a shorter
+    /// window needs an explicit interval.
     public let heartbeatDuration: Int?
     /// How many `checkInInterval` units make up one check-in period.
     public let checkInIntervalCount: Int?
