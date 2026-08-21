@@ -2,16 +2,28 @@
 
 ## Scope
 
-`tamga-swift` implements Tamga's offline verification cryptography natively in Swift, using Apple's CryptoKit and Security frameworks exclusively — no third-party crypto dependency, no C FFI. See `CLAUDE.md`'s "Crypto Architecture" section for the full rationale and primitive-by-primitive mapping. The highest-risk code lives in:
+`tamga-swift` implements Tamga's offline verification cryptography natively in Swift, on
+[apple/swift-crypto](https://github.com/apple/swift-crypto) — one code path across macOS, iOS and
+Linux, and no C FFI. On Apple platforms `Crypto` forwards to CryptoKit, so this is a portable
+spelling of the same primitives rather than a different backend there; `CryptoExtras` supplies RSA,
+which neither exposes. The Security framework is no longer used at all — it was Apple-only and made
+the package impossible to compile on Linux. swift-crypto is pinned to `4.5.1+`, and that floor is a
+security fix, not housekeeping: the 3.x line corrupts the heap on
+`_RSA.Signing.PublicKey(derRepresentation:)`'s malformed-DER error path, which is reachable from
+production with attacker-supplied key bytes. See `CLAUDE.md`'s "Crypto Architecture" section for the
+full rationale and primitive-by-primitive mapping. The highest-risk code lives in:
 
 - [`Sources/Tamga/Crypto/`](Sources/Tamga/Crypto/) — Ed25519, AES-256-GCM, HKDF-SHA256, ECDSA-P256, and RSA (PKCS#1v1.5/PSS) verification primitives.
 - [`Sources/Tamga/Checkout/`](Sources/Tamga/Checkout/) — `.lic`/`.machine` file parse/verify/decrypt.
 - [`Sources/Tamga/Proof.swift`](Sources/Tamga/Proof.swift) — offline proof verification.
 - [`Sources/Tamga/CanonicalJson.swift`](Sources/Tamga/CanonicalJson.swift) — the canonical JSON serializer the offline-proof signature covers.
 
-Out of scope for now: this SDK ships no HTTP client. `TamgaClient`, `Transport` and the JSON:API
-error model are empty placeholders, so nothing here talks to the network — the attack surface is
-entirely "files and strings the caller already holds".
+The HTTP surface is **in** scope, and this section used to say the opposite. `TamgaClient`,
+`Transport` and the JSON:API error model were empty placeholders when this policy was written; as
+of 1.2.0 they are implemented and tested (20 endpoints, auth, 429 retry, `EntitlementCache`, the
+heartbeat schedulers). Reports about `Transport`'s URL construction and path escaping, auth header
+and query-parameter handling, retry behaviour, or response decoding are all in scope — not just
+"files and strings the caller already holds".
 
 ## Offline license file format v2 (compatibility warning)
 
@@ -28,7 +40,7 @@ cryptographically valid forever, because whoever holds the file can simply drop 
 
 ## Supported Versions
 
-The current release series is 1.x (latest tag: `v1.1.0`). The two most recent minor versions
+The current release series is 1.x (latest tag: `v1.2.0`). The two most recent minor versions
 receive security patches; older ones do not.
 
 ## Reporting a Vulnerability
@@ -102,8 +114,9 @@ Each claim below names the code that implements it.
   for the other:
   - **Point validity, on both paths.** A key on a genuinely different curve is rejected because its
     coordinates do not satisfy P-256's curve equation — BoringSSL's `EC_KEY_check_key`, reached from
-    both initializers. Verified against a real secp256k1 key in both encodings, and against a P-256
-    point with a corrupted coordinate; `EcdsaTests.swift` carries these as regression tests. This,
+    both initializers. Verified against a real secp256k1 key in BOTH encodings — its SPKI, and its
+    generator as a bare 65-byte point — and against a P-256 point with one coordinate bit flipped;
+    `EcdsaTests.swift` carries all three as regression tests. This,
     not the OID check below, is what makes a foreign-curve signature unverifiable here — helped by
     `Ecdsa.verify` being hardcoded to build a `P256.Signing.PublicKey`, so the curve the math runs
     on is fixed at compile time and cannot be chosen by the key.

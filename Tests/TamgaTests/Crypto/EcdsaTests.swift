@@ -142,6 +142,38 @@ struct EcdsaTests {
                               signature: Data(repeating: 0, count: 71)))
     }
 
+    /// The SPKI half of the same claim, and the reason the OID check is
+    /// documented as hygiene rather than as the forgery boundary.
+    ///
+    /// A genuine secp256k1 SPKI — real curve, real point on it, honestly
+    /// labelled — is refused by the LIBRARY on point validity, before the SDK's
+    /// OID check would ever have mattered. `Ecdsa.verify` rejects it for the
+    /// OID first, which is why the library-level assertion is made separately:
+    /// without it, this test could not tell "refused because mislabelled" from
+    /// "refused because it is not a P-256 point", and the distinction is the
+    /// whole content of the claim.
+    @Test("a real secp256k1 SPKI is refused by the library on point validity, not merely by the OID check")
+    func realSecp256k1SPKIIsRefusedOnPointValidity() throws {
+        // openssl ecparam -name secp256k1 -genkey | openssl ec -pubout -outform DER
+        let secp256k1SPKI = Data([
+            0x30, 0x56, 0x30, 0x10, 0x06, 0x07, 0x2A, 0x86, 0x48, 0xCE, 0x3D, 0x02, 0x01, 0x06, 0x05, 0x2B,
+            0x81, 0x04, 0x00, 0x0A, 0x03, 0x42, 0x00, 0x04, 0x8A, 0x4D, 0x70, 0x19, 0xBF, 0xF5, 0xFA, 0x12,
+            0x38, 0xDB, 0xEC, 0x8E, 0x3A, 0xB8, 0x47, 0x5F, 0x40, 0xB6, 0x19, 0xEB, 0xBD, 0x20, 0x9D, 0x20,
+            0xB2, 0x62, 0x59, 0x27, 0x1F, 0x71, 0x25, 0x70, 0x7B, 0xEE, 0x79, 0x66, 0xE6, 0x77, 0x98, 0x17,
+            0x89, 0xBF, 0xCA, 0x56, 0xF9, 0xFF, 0x00, 0xB7, 0x00, 0x8F, 0x88, 0x76, 0x39, 0x72, 0xC2, 0x85,
+            0xC8, 0x8A, 0x92, 0x15, 0xF7, 0xB1, 0xA5, 0x24
+        ])
+
+        // Long enough that the 65-byte bare-point dispatch cannot claim it.
+        #expect(secp256k1SPKI.count > 65)
+
+        #expect(throws: (any Error).self) {
+            _ = try P256.Signing.PublicKey(derRepresentation: secp256k1SPKI)
+        }
+        #expect(!Ecdsa.verify(publicKey: secp256k1SPKI, message: Data("payload".utf8),
+                              signature: Data(repeating: 0, count: 71)))
+    }
+
     @Test("verify rejects a bare point that is not on the P-256 curve")
     func verifyRejectsOffCurveBarePoint() throws {
         let key = P256.Signing.PrivateKey()
