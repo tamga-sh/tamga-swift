@@ -159,6 +159,56 @@ let (machine, claims) = try MachineFile.parse(pem).verifyWithClaims(
 )
 ```
 
+### Key rotation
+
+A file signed before the account rotated its signing key does not verify against the current key.
+Pass a **key set** instead of a single key and it does — and, just as importantly, a file signed by
+a key you do not have stops being indistinguishable from a forged one:
+
+```swift
+import Foundation
+import Tamga
+
+func verify(pem: String, licenseKey: String, keys: [TamgaSigningKey], serverNow: Int64) throws {
+    do {
+        let result = try LicenseFile.parse(pem).verifyWithClaims(
+            signingKeys: keys,
+            licenseKey: licenseKey,
+            now: serverNow
+        )
+        if result.key.isRetired {
+            // Authentic, but issued before the last rotation. Time for a fresh checkout.
+        }
+    } catch let error as TamgaSigningKeyError {
+        // `.unknownSigningKey(kid:available:)` — the file names a key this set does not
+        // hold. Refresh the key set; do NOT treat this as tampering.
+        print(error.localizedDescription)
+    } catch TamgaCheckoutError.signatureVerificationFailed {
+        // The key it names IS in the set, and the signature still fails.
+        // This one really is forged or corrupted.
+    }
+}
+```
+
+A `kid` is the first **eight bytes** of `SHA-256` over the public key **string** — the base64 text
+the API publishes, not the decoded bytes — hex-encoded, so sixteen characters.
+`TamgaSigningKey.keyId(forPublicKey:)` computes it, and
+`TamgaSigningKey.ed25519(publicKey:)` builds a whole key record from a public key alone.
+
+**Where the key set comes from is up to you, and pinning is usually the right answer.**
+`TamgaClient.listSigningKeys()` fetches it, but that route needs the `account.read` permission and
+a license-key credential does not hold it — an embedded client gets `403`. Build the set from keys
+pinned into the app instead; an offline verifier that only works while it has a network is not
+offline. An empty result from the endpoint is also normal rather than a fault: the key table is
+written only by a rotation, so an account that has never rotated has no rows at all.
+
+**Machine files: Ed25519 only.** The server computes a machine file's `kid` from the account's
+Ed25519 key whatever scheme actually signed the file, so for an RSA- or ECDSA-signed machine file
+the claim names a key that had no part in the signature. Those throw
+`TamgaSigningKeyError.keyIdNotApplicable`; verify them with the scheme-and-key form above. Nothing
+is lost — rotation only ever rotates the Ed25519 key. License files are always Ed25519-signed and
+are unaffected.
+
 ### Offline proofs
 
 An offline proof is a `meta.proof` string of the form `v1x0.<base64 signature>`, signed over a
@@ -241,7 +291,9 @@ deliberate boundaries, not oversights.
 
 - **Machine fingerprints.** No SDK in the fleet generates one. Producing a stable, device-specific,
   reasonably tamper-resistant fingerprint — and keeping it stable across reinstalls — is yours.
-- **Embedding the account public key**, plus rotation and key-id handling.
+- **Embedding the account public key.** Rotation and key-id handling are no longer yours: pass a
+  `[TamgaSigningKey]` to the offline verifiers and they select the key the file names. See
+  [Key rotation](#key-rotation).
 - **Persistence.** Nothing is written to disk. Storing `.lic`/`.machine` files, deciding when to
   refresh them, and securing the license key in the keychain are yours. The only cache is the
   60-second in-memory entitlement cache, which does not survive a restart.
@@ -261,6 +313,14 @@ deliberate boundaries, not oversights.
   `TOKEN`, and `NONE` behaves the same way at that gate, so against a default policy every call
   fails `401 LICENSE_NOT_ALLOWED`. That is a policy configuration precondition — retrying it, or
   asking the user for a different key, accomplishes nothing.
+- **Session-cookie auth needs an `Origin`, and the failure mode hides that.** The server does not
+  reject a cookie whose `Origin` does not match its configured portal origin — it *ignores* the
+  cookie and treats the request as anonymous, so the `401` you get back says no credentials were
+  provided. `TamgaClient` now sends the header for `AuthTransport.sessionCookie` and for no other
+  transport, defaulting to `TamgaClient.defaultPortalOrigin`; pass `origin:` if your server sets a
+  different one, and match it exactly. One consequence rides along: any request carrying an
+  `Origin` makes `quickValidate` skip its `last_validated_at` write, so under cookie auth that
+  write does not happen.
 - **8 of the 24 `ValidationCode` values are unreachable.** All 24 are modelled;
   `ValidationCode.isReachable` reports which. Do not build behaviour on an unreachable one.
 - **Six of the eight `Scope` fields are enforced** — product, policy, user, environment,

@@ -50,4 +50,9 @@ jobs:
       - uses: googleapis/release-please-action@v5
         with:
           token: ${{ steps.app-token.outputs.token }}
-          release-type: simple
+          # Manifest mode, matching tamga-go and tamga-c. `release-type` is NOT
+          # passed alongside these: supplying it puts the action in standalone
+          # mode, where the config file — and so its `extra-files` — is ignored.
+          # The release type now lives in release-please-config.json.
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json

@@ -133,7 +133,7 @@ public struct MachineFile: Sendable {
     /// distinction is load-bearing: `RSA_2048_PKCS1_SIGN` and
     /// `RSA_2048_JWT_RS256` produce the identical `rsa-sha256` suffix, so a
     /// verifier that read the scheme out of `alg` could not tell them apart.
-    private func validatedAlgorithm(scheme: LicenseScheme) throws -> MachineFileAlgorithm {
+    func validatedAlgorithm(scheme: LicenseScheme) throws -> MachineFileAlgorithm {
         guard let expectedSuffix = MachineFileAlgorithm.signingSuffix(for: scheme) else {
             throw TamgaCheckoutError.schemeNotSupported(
                 "RSA_2048_JWT_RS256 is rejected server-side for machine files (422 SCHEME_NOT_SUPPORTED) " +
@@ -173,7 +173,7 @@ public struct MachineFile: Sendable {
     /// The signature check on its own, with `alg` already validated by the
     /// caller. Split out so `verifyWithClaims` can hold the parsed algorithm
     /// it needs for the payload branch without parsing twice.
-    private func verifySignature(scheme: LicenseScheme, publicKey: Data) -> Bool {
+    func verifySignature(scheme: LicenseScheme, publicKey: Data) -> Bool {
         guard let signature = Data(base64Encoded: certificate.sig) else {
             return false
         }
@@ -318,5 +318,31 @@ public struct MachineFile: Sendable {
         }
 
         return (Machine.fromResource(payload.data), claims)
+    }
+
+    /// The signed claims, read **without** verifying the signature.
+    ///
+    /// Diagnostic only. See `LicenseFile.unverifiedClaims(licenseKey:)` for
+    /// the full rationale -- this is the machine-file half of the same thing,
+    /// and the same rule applies: it is reached only once every key in a
+    /// caller-supplied key set has already failed, its output picks an error
+    /// label and nothing else, and no `Machine` is ever produced from it.
+    func unverifiedClaims(
+        algorithm: MachineFileAlgorithm, licenseKey: String, fingerprint: String
+    ) -> LicenseFileClaims? {
+        let jsonBytes: Data
+        switch algorithm.encoding {
+        case .aes256Gcm:
+            let key = Hkdf.deriveMachineFileKey(licenseKey: licenseKey, fingerprint: fingerprint)
+            guard let decrypted = try? EncryptedPayloadDecryptor.decryptDotSeparated(
+                certificate.enc, key: key, context: "Encrypted machine file"
+            ) else { return nil }
+            jsonBytes = decrypted
+        case .base64:
+            guard let payloadBytes = Data(base64Encoded: certificate.enc) else { return nil }
+            jsonBytes = payloadBytes
+        }
+        return try? TamgaJSONCoding.decoder
+            .decode(JSONAPIPayload<MachineAttributes>.self, from: jsonBytes).meta
     }
 }
