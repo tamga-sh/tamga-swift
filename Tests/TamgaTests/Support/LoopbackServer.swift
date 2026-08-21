@@ -20,8 +20,12 @@ import Darwin
 final class LoopbackServer: @unchecked Sendable {
     /// What to answer with.
     enum Behaviour: Sendable {
-        /// A 302 pointing at `location`, which a correct client refuses.
-        case redirect(to: String)
+        /// A `3xx` pointing at `location`, which a correct client refuses.
+        ///
+        /// The status is a parameter because `302` and `303` are not
+        /// interchangeable to `URLSession`: a `303` rewrites the follow-up to
+        /// `GET`, and the artifact download route answers exactly `303`.
+        case redirect(status: Int, reason: String, to: String)
         /// A 200 declaring `declaredLength` and then writing `actualBytes`
         /// bytes. Declaring more than is sent is how the streaming cap gets
         /// exercised without waiting on a real multi-megabyte transfer.
@@ -30,7 +34,20 @@ final class LoopbackServer: @unchecked Sendable {
 
     private let listenSocket: Int32
     private let queue = DispatchQueue(label: "tamga.loopback")
+    private let counterLock = NSLock()
+    private var accepted = 0
     private(set) var port: UInt16 = 0
+
+    /// How many connections this server has accepted.
+    ///
+    /// Zero is the assertion that matters for a redirect target: a client that
+    /// refused the hop never opened a socket to it, so no header of any kind
+    /// reached it.
+    var acceptedConnections: Int {
+        counterLock.lock()
+        defer { counterLock.unlock() }
+        return accepted
+    }
 
     init?(behaviour: Behaviour) {
         // Glibc types SOCK_STREAM as `__socket_type`; Darwin types it as Int32.
@@ -74,9 +91,14 @@ final class LoopbackServer: @unchecked Sendable {
         }
         port = UInt16(bigEndian: boundAddress.sin_port)
 
-        queue.async { [listenSocket] in
+        queue.async { [listenSocket, weak self] in
             let connection = accept(listenSocket, nil, nil)
             guard connection >= 0 else { return }
+            if let self {
+                self.counterLock.lock()
+                self.accepted += 1
+                self.counterLock.unlock()
+            }
             var scratch = [UInt8](repeating: 0, count: 4096)
             _ = read(connection, &scratch, 4096)
             Self.respond(on: connection, behaviour: behaviour)
@@ -86,8 +108,8 @@ final class LoopbackServer: @unchecked Sendable {
 
     private static func respond(on connection: Int32, behaviour: Behaviour) {
         switch behaviour {
-        case .redirect(let location):
-            let response = "HTTP/1.1 302 Found\r\nLocation: \(location)\r\n"
+        case .redirect(let status, let reason, let location):
+            let response = "HTTP/1.1 \(status) \(reason)\r\nLocation: \(location)\r\n"
                 + "Content-Length: 0\r\nConnection: close\r\n\r\n"
             _ = response.withCString { write(connection, $0, strlen($0)) }
         case .body(let declaredLength, let actualBytes):

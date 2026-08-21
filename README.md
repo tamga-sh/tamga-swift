@@ -69,6 +69,100 @@ func activate(licenseFile pem: String, licenseKey: String, publicKey: Data) {
 failure is a case of [`TamgaCheckoutError`](Sources/Tamga/Errors.swift); nothing here silently
 returns an unverified `License`.
 
+## Release artifacts
+
+An artifact is the payload of a release — the file an updater actually downloads. Listing and
+reading artifact metadata were always permitted to a license key; **downloading** was not, until
+`tamga-api@e6d317b` granted `artifact.download` to the license-token role and routed a handler for
+it. All three are wrapped here now.
+
+```swift
+let page = try await client.listReleaseArtifacts(releaseId: release.id)
+guard let artifact = page.items.first(where: { $0.platform == "darwin" && $0.arch == "arm64" })
+else { return }
+
+let download = try await client.downloadArtifact(artifact.id, ttl: 900)
+
+// A plain session. NOT the SDK's client, and no Authorization header.
+let (fileURL, _) = try await URLSession.shared.download(from: download.url)
+```
+
+**The URL is fetched by you, without credentials, and that is the whole design.** The route's
+default answer is a `303 See Other` pointing at object storage. This SDK refuses redirects outright,
+so `downloadArtifact` asks for `?redirect=false` and gets the presigned URL back in the body
+instead — no 3xx is generated at all, which holds regardless of which HTTP client you inject.
+The URL authenticates itself through its query string and needs no header of yours. Nothing is
+streamed through the SDK — a real installer routinely exceeds the client's 32 MiB response cap, and
+`Artifact.checksum` is yours to verify against the bytes you receive.
+
+`ttl` is the URL's lifetime in seconds, between `TamgaClient.minimumDownloadTTLSeconds` (60) and
+`TamgaClient.maximumDownloadTTLSeconds` (604800, one week). Omit it for the server's 300-second
+default. Out-of-range values are refused before the request is sent.
+
+**A `403` here is usually not a permissions problem.** The download enforces the owning release's
+read gate as well as the permission, so a product's `CLOSED` distribution strategy, a suspended
+license, an expired license under a policy whose `expirationStrategy` withholds newer builds, and a
+missing release entitlement each answer `403` to a caller that *does* hold `artifact.download`.
+Listing does not apply that gate, so a listable artifact is not necessarily a downloadable one.
+
+`Artifact.redirectURL` is `nil` on list and show — the server omits the key there. Use
+`downloadArtifact`, which returns the URL parsed and non-optional.
+
+**The URL's scheme is validated for you.** `redirectUrl` is the one value in this SDK that is a URL
+nobody here chose, and `URL(string:)` is not a guard: it accepts `file:///etc/passwd` (reporting
+`isFileURL == true`), `javascript:`, `data:`, `ftp:`, the bare path `/etc/passwd`, and
+`C:\Windows\x` with the scheme `"C"`. Since the documented next step is to hand the result to
+`URLSession.download(from:)`, a `file:` URL surviving that far is a local-file read at a path the
+response body chose. `downloadArtifact` therefore requires `http` or `https` (case-insensitively —
+`URL` does not normalise the scheme) plus a host, and throws `TamgaError.malformedResponse`
+otherwise. The raw `Artifact.redirectURL` string is **not** checked; validate it yourself if you
+use it instead of `ArtifactDownload.url`.
+
+## Fingerprint canonicalisation
+
+The server stores `fingerprint TEXT NOT NULL` with no length limit, no `CHECK` and no
+normalisation, unique per `(license_id, fingerprint)`. So `"ABC-123"`, `"abc-123"` and
+`" ABC-123 "` are three machines occupying three seats on one license. `TamgaFingerprint` collapses
+the differences that are accidents of formatting, and only those:
+
+```swift
+let fingerprint = try TamgaFingerprint.compute([
+    .init(label: "machine-id", value: machineId),
+    .init(label: "disk", value: diskSerial)
+])
+let machine = try await client.activateMachine(
+    licenseId: licenseId, options: .init(fingerprint: fingerprint))
+```
+
+The rule, identical in all eight SDKs:
+
+```text
+canonical   = "tamga-fingerprint-v1" <US> join(<US>, sort_bytewise(["label=value"]))
+fingerprint = lowercase_hex(SHA-256(UTF-8(canonical)))     // 64 characters
+```
+
+`<US>` is U+001F. Component order does not matter (they are sorted). Surrounding ASCII whitespace
+is trimmed from values. Labels must be non-empty ASCII printable `0x21`–`0x7E` without `=`; values
+may contain `=`, non-ASCII text, or nothing at all.
+
+Three things it deliberately does **not** do, each of which throws or is documented rather than
+being quietly applied:
+
+- **No Unicode normalisation.** Foundation offers `precomposedStringWithCanonicalMapping` and using
+  it here would be one line. It is left out because NFC needs a new dependency in Rust and Go and
+  ICU or hand-rolled tables in C11 — and a rule eight ports cannot implement identically is worse
+  than no rule, because it would give one machine two fingerprints depending on which SDK the app
+  was written in. **If your values can arrive in more than one normal form, normalise them
+  yourself before calling.**
+- **No case folding.** Lowercasing a base64 or hex identifier corrupts it.
+- **No repair.** An empty label, a duplicate label, a non-ASCII label, a control character in a
+  value, or an empty component list all throw
+  [`TamgaFingerprintError`](Sources/Tamga/Fingerprint.swift). Stripping a control character instead
+  would map two different inputs onto one seat.
+
+`TamgaFingerprint.canonical(_:)` returns the pre-hash string, which is worth logging when two
+machines disagree — a 64-character hash says nothing about which component differed.
+
 ## Offline verification
 
 ### License files (`.lic`)
@@ -291,8 +385,11 @@ deliberate boundaries, not oversights.
 
 **Left to your application**
 
-- **Machine fingerprints.** No SDK in the fleet generates one. Producing a stable, device-specific,
-  reasonably tamper-resistant fingerprint — and keeping it stable across reinstalls — is yours.
+- **Machine fingerprints.** No SDK in the fleet *generates* one — choosing what identifies a
+  machine is a product decision, not a library one (a cloned VM template shares its hardware ids, a
+  container has none, a replaced motherboard changes them). Producing stable, device-specific
+  components is still yours. Turning them into one canonical string is not: see
+  [Fingerprint canonicalisation](#fingerprint-canonicalisation).
 - **Embedding the account public key.** Rotation and key-id handling are no longer yours: pass a
   `[TamgaSigningKey]` to the offline verifiers and they select the key the file names. See
   [Key rotation](#key-rotation).
@@ -427,14 +524,33 @@ deliberate boundaries, not oversights.
   their 30-second window does not run, so a registration this SDK creates and never deletes is
   permanent — and processes count against `policy.max_processes`. Call `deleteProcess`, or
   `ProcessHeartbeatScheduler.stopAndDelete()`, on the way out.
-- **No RFC 9421 response-signature verification here.** Artifact download is also absent — the
-  route exists but no role grants the permission it requires, so it `403`s for every client.
+- **No RFC 9421 response-signature verification here.**
+- **Artifact writes are absent.** `artifact.create`/`update`/`delete` are not in a licence token's
+  permission set — publishing a build is an operator action. Reading and downloading artifacts
+  *are* wrapped; see [Release artifacts](#release-artifacts).
 
 **Transport hardening**
 
-- **Redirects are refused.** The API never legitimately redirects, and a 3xx can carry credentials
-  to a host you never configured — the session-cookie form especially, which no framework-level
-  stripping protects.
+- **Redirects are refused.** The API never legitimately redirects on a route this SDK calls, and a
+  3xx can carry credentials to a host you never configured.
+
+  Measured on `URLSession` against a loopback server with the refusal disabled: the follow-up
+  request is rebuilt *without* the original `Authorization` header, cross-origin **and**
+  same-origin, so `.licenseKey`, `.bearer` and the `basic*` forms are already protected by the
+  framework and `.queryParameter` is displaced by the target's own query string. **`.sessionCookie`
+  is the exception** — it is a manually-set `Cookie` header with `httpShouldSetCookies` disabled,
+  nothing strips it, and it reached a different-origin target intact. That one form is what this
+  refusal actually protects.
+
+  Across this SDK fleet the leaking credential differs by runtime — `URLSession` and .NET's
+  `HttpClient` strip `Authorization` on every hop, while the Fetch standard strips it cross-origin
+  only, and a directly-set `Cookie` forwards on all three. There is no general rule to lean on, so
+  refusing outright is the only policy that does not depend on which header a platform happens to
+  protect.
+
+  The one route that *does* redirect by default is the artifact download, and `downloadArtifact`
+  asks it not to, so no 3xx is generated at all — a property of the request rather than of
+  whichever HTTP client you inject. See [Release artifacts](#release-artifacts).
 - **Response bodies are capped at 32 MiB, enforced during the transfer.** A response that declares
   more than the cap is refused before any body arrives, and one that declares nothing is cut off the
   moment the running total crosses it. A timeout bounds how long a response may take, not how large

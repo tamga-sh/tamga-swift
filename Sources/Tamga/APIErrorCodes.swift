@@ -84,6 +84,29 @@ public enum TamgaAPIErrorCode {
     /// to a working validate rather than a hard failure. See `Scope`.
     public static let scopeNotSupported = "SCOPE_NOT_SUPPORTED"
 
+    /// `TamgaClient.downloadArtifact(_:ttl:)` asked for a presigned-URL
+    /// lifetime outside `[60s, 1 week]`.
+    ///
+    /// **This is not the `TTL_INVALID` the checkout routes use.** The two
+    /// checkout handlers emit `TTL_INVALID` (`check_out_license.rs:48`,
+    /// `check_out_machine.rs:50`) while the artifact download emits
+    /// `PRESIGN_TTL_INVALID` (`artifacts/service.rs:33`), so a handler written
+    /// against one will silently not match the other. Different limits, too:
+    /// checkout's ttl bounds a certificate's validity, this one bounds a URL's.
+    ///
+    /// The SDK checks the range before sending, so reaching this means the
+    /// server's bounds have moved away from
+    /// `TamgaClient.minimumDownloadTTLSeconds`/`maximumDownloadTTLSeconds`.
+    public static let presignTTLInvalid = "PRESIGN_TTL_INVALID"
+
+    /// A checkout route's `ttl` was out of range. See `presignTTLInvalid`,
+    /// which is the artifact download's differently-spelled equivalent.
+    public static let ttlInvalid = "TTL_INVALID"
+
+    /// The deployment has no object-storage backend configured, so artifact
+    /// bytes cannot be served. Not an authorization problem.
+    public static let storageUnavailable = "STORAGE_UNAVAILABLE"
+
     // MARK: Uniqueness (HTTP 409)
 
     /// A machine with this fingerprint is already registered within the

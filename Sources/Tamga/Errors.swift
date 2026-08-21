@@ -174,7 +174,10 @@ public enum TamgaCheckoutError: Error, Equatable {
     /// `RSA_2048_JWT_RS256` (or any other scheme never implemented for a
     /// given file type) was requested explicitly.
     case schemeNotSupported(String)
-    /// Client-side mirror of the server's `422 TTL_INVALID`: `ttl` must be
+    /// Client-side mirror of the server's `422 TTL_INVALID` **on the checkout
+    /// routes only** -- the artifact download's equivalent is spelled
+    /// `PRESIGN_TTL_INVALID` and is a different limit; see
+    /// `TamgaAPIErrorCode.presignTTLInvalid`. `ttl` must be
     /// `> 0 && <= 31536000` (365 days).
     case ttlInvalid(String)
 }
