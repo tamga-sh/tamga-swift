@@ -17,7 +17,7 @@ point at <https://tamga.sh> instead.
 ECDSA-P256, RSA PKCS1/PSS, DER), `Checkout/`, `Proof.swift`, and the HTTP surface
 (`TamgaClient`'s 20 endpoints, `Transport`, `AuthTransport`, the JSON:API error model,
 `EntitlementCache`, both heartbeat schedulers, and the full `Policy` struct) are all implemented
-and tested — 226 tests, ~88% line coverage against an 80% gate.
+and tested — 252 tests, ~90% line coverage against an 80% gate.
 
 The normative description of the network surface is `../docs/api-client-contract.md`, derived from
 `tamga-go`. Behavioural changes to `TamgaClient`/`Transport` should update that document too, or
@@ -62,6 +62,16 @@ production with attacker-supplied bytes. Do not relax the pin back to 3.x.
 where a P1363 signature would be exactly 64 raw bytes. This previously used `rawRepresentation` and
 rejected every genuine server-issued ECDSA machine file.
 
+**`Crypto/Ecdsa.swift` accepts a bare 65-byte uncompressed point as well as SPKI, and it has to.**
+The server publishes `ecdsa_public_key` as `BASE64.encode(ecdsa_pair.public_key().as_ref())`
+(`crypto/key_material.rs`, pinned by its own `ecdsa_public_key_is_65_bytes` test) and
+`accounts/serializer.rs` hands that same string to API callers. This type used to require X.509
+`SubjectPublicKeyInfo` and so returned `false` for every genuine ECDSA machine file — a caller who
+base64-decoded the key the API gave them could not verify anything. Confirmed empirically against
+server-issued fixtures. The whole SDK fleet assumes PKIX/SPKI here, so the same gap is very likely
+live in the other seven repos. RSA needs no equivalent branch: the server publishes PKCS#1
+`RSAPublicKey` DER and `_RSA.Signing.PublicKey(derRepresentation:)` accepts both encodings.
+
 **`Crypto/Ecdsa.swift` has an explicit curve-OID check most callers would not expect to need.**
 Confirmed directly (empirically, not assumed): CryptoKit's
 `P256.Signing.PublicKey(derRepresentation:)` does NOT validate the curve OID in the
@@ -72,7 +82,10 @@ length) is silently accepted by CryptoKit's own parser. `Ecdsa.swift`'s guard (b
 bug class a cross-repo security audit of this SDK family found live in
 `tamga-python`/`tamga-go`/`tamga-dotnet`'s generic `ECDsa`-based verifiers, which had no equivalent
 check. Do not remove this guard to "simplify" the type; see `EcdsaTests.swift`'s regression test for
-what it protects against.
+what it protects against. It applies to the SPKI branch only, and deliberately: a bare X9.63 point
+declares no curve to confuse, and `P256.Signing.PublicKey(x963Representation:)` rejects any point
+not on P-256 (verified against both a corrupted coordinate and a real P-384 point). Do not "unify"
+the two branches by dropping the OID check.
 
 **Everything else is hand-rolled, idiomatic Swift.** HTTP transport goes on `URLSession` behind
 the `HTTPRequestPerforming` protocol — no crypto library is used for networking, JSON:API decoding,
@@ -287,6 +300,32 @@ specification covers the full set, including analytics/EE items that don't touch
   two paths bleed into each other, and don't reintroduce the pre-v2 license-file transform (raw
   key bytes zero-padded to 32). That transform and the `NaiveKey` type implementing it were
   deleted, not deprecated, so no caller can silently opt back into the weaker derivation.
+- **Offline MACHINE files are format v2 too, and the SDK used to read all three parts of that
+  format wrong.** `alg` is `"<encoding>+<signing suffix>+v2"`, parsed by `MachineFileAlgorithm`:
+  encoding at the FIRST `+`, the `v2` marker at the LAST, signing suffix in between, cross-checked
+  against the caller-supplied scheme. Both `aes-256-gcm` and `rsa-pss-sha256` contain hyphens and
+  `rsa-pss-sha256` contains `rsa-sha256`, so a substring test or an index-1 split gets `ed25519`
+  right and the rest wrong — which is why the bug survived. `alg` is NOT covered by the signature,
+  so a downgrade to v1 costs an attacker one edit. An encrypted machine file's `enc` is
+  `"<nonce_b64>.<cipher_b64>"` — two SEPARATELY base64'd halves, from
+  `FieldEncryption::encrypt` — not one blob with a 12-byte nonce on the front. (The server's own
+  doc comment at `machine_file.rs` still says `base64(nonce‖ciphertext‖tag)` and contradicts the
+  code twenty lines below it; that stale comment is why all eight SDKs implemented the same wrong
+  thing. Trust the code.) LICENSE files really are the single-blob form — `encode_license_file`
+  does not go through `FieldEncryption` — so `EncryptedPayloadDecryptor` keeps both readers and
+  they are not interchangeable. **Whether that misreading was an ACTIVE failure depended on the
+  language's base64 decoder, and Swift is on the failing side.** Both halves are a multiple of 4
+  characters, so a lenient decoder drops the `.`, decodes the concatenation as one stream, and
+  reconstructs `nonce ‖ ciphertext ‖ tag` byte-for-byte — the old 12-byte slice then lands
+  correctly by accident, which is what happens in CPython and Node. `Data(base64Encoded:)` is
+  strict unless given `.ignoreUnknownCharacters`, and no call site here passes it, so every
+  encrypted machine file failed outright with "enc is not valid base64". Do not add that option to
+  "be forgiving": it would quietly restore the wrong reading.
+  `MachineFileServerFixtureAdversarialTests.dotSeparatedEncIsNotAcceptedAsPlainBase64` is the
+  standing guard on that. And the signed payload carries `meta` claims, so `exp` is enforced
+  with the SAME `LicenseFile.clockSkewToleranceSeconds`; a missing `exp` is legitimate and means
+  the checkout carried no `ttl`. Verify, then split, then decode, then decrypt — never decode
+  attacker-controlled bytes before the signature has passed.
 - **Offline license files are format v2 only.** `alg` must be `base64+ed25519+v2` or
   `aes-256-gcm+ed25519+v2`, the payload must carry signed `meta` claims (`iat`/`exp`/`jti`/`kid`),
   and `exp` is enforced with a 60-second clock-skew tolerance

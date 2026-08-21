@@ -13,7 +13,7 @@ struct EcdsaTests {
         let signature = try key.signature(for: message)
 
         let derKey = key.publicKey.derRepresentation
-        #expect(Ecdsa.verify(publicKeyDER: derKey, message: message, signature: signature.derRepresentation))
+        #expect(Ecdsa.verify(publicKey: derKey, message: message, signature: signature.derRepresentation))
     }
 
     @Test("verify returns false for a tampered message")
@@ -23,7 +23,7 @@ struct EcdsaTests {
 
         let derKey = key.publicKey.derRepresentation
         let tampered = Data("tampered".utf8)
-        #expect(!Ecdsa.verify(publicKeyDER: derKey, message: tampered, signature: signature.derRepresentation))
+        #expect(!Ecdsa.verify(publicKey: derKey, message: tampered, signature: signature.derRepresentation))
     }
 
     @Test("verify returns false for a genuinely different curve's key and signature (P-384)")
@@ -38,7 +38,7 @@ struct EcdsaTests {
         let signature = try key.signature(for: message)
 
         let derKey = key.publicKey.derRepresentation
-        #expect(!Ecdsa.verify(publicKeyDER: derKey, message: message, signature: signature.derRepresentation))
+        #expect(!Ecdsa.verify(publicKey: derKey, message: message, signature: signature.derRepresentation))
     }
 
     /// Regression test for the curve-confusion bug class this SDK family's
@@ -82,14 +82,14 @@ struct EcdsaTests {
         mislabeledSPKI.append(contentsOf: algorithmIdentifier)
         mislabeledSPKI.append(contentsOf: bitString)
 
-        #expect(!Ecdsa.verify(publicKeyDER: Data(mislabeledSPKI), message: message, signature: derSignature))
+        #expect(!Ecdsa.verify(publicKey: Data(mislabeledSPKI), message: message, signature: derSignature))
     }
 
     @Test("verify returns false, not a crash, for a malformed public key")
     func verifyReturnsFalseForMalformedKey() {
         let malformed = Data([0x01, 0x02, 0x03])
         let signature = Data(repeating: 0, count: 64)
-        #expect(!Ecdsa.verify(publicKeyDER: malformed, message: Data("payload".utf8), signature: signature))
+        #expect(!Ecdsa.verify(publicKey: malformed, message: Data("payload".utf8), signature: signature))
     }
 
     @Test("verify rejects a raw (r, s) P1363 signature, which is not the wire format")
@@ -106,10 +106,10 @@ struct EcdsaTests {
         #expect(signature.rawRepresentation.count == 64)
         #expect(signature.derRepresentation.first == 0x30)
 
-        #expect(Ecdsa.verify(publicKeyDER: key.publicKey.derRepresentation,
+        #expect(Ecdsa.verify(publicKey: key.publicKey.derRepresentation,
                              message: message,
                              signature: signature.derRepresentation))
-        #expect(!Ecdsa.verify(publicKeyDER: key.publicKey.derRepresentation,
+        #expect(!Ecdsa.verify(publicKey: key.publicKey.derRepresentation,
                               message: message,
                               signature: signature.rawRepresentation))
     }
@@ -120,6 +120,6 @@ struct EcdsaTests {
         let tooShort = Data([0x01, 0x02, 0x03]) // far too short to be a DER SEQUENCE
         let derKey = key.publicKey.derRepresentation
 
-        #expect(!Ecdsa.verify(publicKeyDER: derKey, message: Data("payload".utf8), signature: tooShort))
+        #expect(!Ecdsa.verify(publicKey: derKey, message: Data("payload".utf8), signature: tooShort))
     }
 }

@@ -20,8 +20,20 @@ enum Rsa {
     /// The only modulus size the server issues, and the only one accepted here.
     static let requiredKeySizeInBits = 2048
 
-    /// Imports an RSA public key from X.509 `SubjectPublicKeyInfo` DER bytes,
-    /// rejecting anything that is not exactly 2048 bits.
+    /// Imports an RSA public key from DER bytes, rejecting anything that is
+    /// not exactly 2048 bits.
+    ///
+    /// BOTH PKCS#1 `RSAPublicKey` and X.509 `SubjectPublicKeyInfo` are
+    /// accepted, because `_RSA.Signing.PublicKey(derRepresentation:)` accepts
+    /// both and the server publishes the former: `extract_public_key`
+    /// (`license_signing.rs`) and `key_material.rs` both return whatever
+    /// aws-lc-rs's `RsaKeyPair::public_key().as_der()` yields, which is PKCS#1.
+    /// Confirmed empirically against server-issued fixtures: 270 bytes opening
+    /// `30 82 01 0a 02 82 01 01 00`, parsing to 2048 bits, verifying real
+    /// signatures. This function used to be documented as SPKI-only, which was
+    /// simply wrong about what it accepted; no behaviour changed with the
+    /// correction. Contrast `Ecdsa`, where the equivalent mismatch WAS real and
+    /// did need a fix.
     ///
     /// SECURITY: the size check is the point of this function existing rather
     /// than the initializer being called inline. `_RSA.Signing.PublicKey`
@@ -30,7 +42,7 @@ enum Rsa {
     /// reaching here can come from a caller-supplied file, "verifies" must
     /// also mean "at the strength this protocol requires". Mirrors the same
     /// explicit check in `tamga-java`'s `Rsa.java`.
-    private static func importPublicKey(fromSubjectPublicKeyInfo der: Data) -> _RSA.Signing.PublicKey? {
+    private static func importPublicKey(fromDER der: Data) -> _RSA.Signing.PublicKey? {
         guard let key = try? _RSA.Signing.PublicKey(derRepresentation: der) else {
             return nil
         }
@@ -58,7 +70,7 @@ enum Rsa {
         signature: Data,
         padding: _RSA.Signing.Padding
     ) -> Bool {
-        guard let key = importPublicKey(fromSubjectPublicKeyInfo: publicKeyDER) else {
+        guard let key = importPublicKey(fromDER: publicKeyDER) else {
             return false
         }
         // Fails closed: a malformed key, a wrong-sized key, a malformed

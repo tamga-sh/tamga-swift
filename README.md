@@ -11,7 +11,7 @@ Two independent surfaces, either usable without the other:
 - **`LicenseFile`, `MachineFile` and `MachineProof`** verify `.lic`/`.machine` files and offline
   proofs with **no network access at all**, once your account's public key is embedded in the app.
 
-Runs on macOS 13+, iOS 16+ and Linux. 226 tests, with an 80% line-coverage gate in CI.
+Runs on macOS 13+, iOS 16+ and Linux. 252 tests, with an 80% line-coverage gate in CI.
 
 ## Install
 
@@ -129,8 +129,27 @@ func verifyMachineFile(
 
 `scheme` is `.ed25519Sign` (also the default for a license with no scheme set),
 `.rsa2048Pkcs1Sign`, `.rsa2048Pkcs1PssSign` or `.ecdsaP256Sign`. `.rsa2048JwtRs256` throws
-`TamgaCheckoutError.schemeNotSupported` — machine files are never JWT-signed. RSA and ECDSA keys
-are X.509 `SubjectPublicKeyInfo` DER; Ed25519 keys are raw 32 bytes.
+`TamgaCheckoutError.schemeNotSupported` — machine files are never JWT-signed.
+
+Pass the public key exactly as the API gives it to you. Ed25519 is 32 raw bytes; ECDSA P-256 is
+the 65-byte uncompressed point the account resource publishes (X.509 `SubjectPublicKeyInfo` is
+also accepted); RSA is DER, either PKCS#1 `RSAPublicKey` or `SubjectPublicKeyInfo`.
+
+Machine files are format v2, exactly as license files are: `alg` must end `+v2`, the signed
+payload carries `meta` claims, and `exp` is enforced with the same 60-second tolerance. A file
+whose checkout carried no `ttl` has no `exp` and genuinely never expires. To supply a trusted
+timestamp instead of the local clock, or to read `iat`/`jti`/`kid` back, use
+`verifyWithClaims(scheme:publicKey:licenseKey:fingerprint:now:)`:
+
+```swift
+let (machine, claims) = try MachineFile.parse(pem).verifyWithClaims(
+    scheme: scheme,
+    publicKey: publicKey,
+    licenseKey: licenseKey,
+    fingerprint: fingerprint,
+    now: trustedUnixSeconds
+)
+```
 
 ### Offline proofs
 
@@ -179,7 +198,17 @@ Every claim here names the code that implements it.
   payload** (`Sources/Tamga/Checkout/LicenseFile.swift::verify`).
 - **Machine-file verifier dispatch uses the caller-supplied scheme, never the file's own `alg`**
   (`Sources/Tamga/Checkout/MachineFile.swift::verify`) — two distinct RSA schemes share one `alg`
-  suffix on the wire, so trusting it would be an algorithm-confusion hole.
+  suffix on the wire, so trusting it would be an algorithm-confusion hole. `alg` is parsed and
+  cross-checked against that scheme, never substring-matched
+  (`Sources/Tamga/Checkout/MachineFileAlgorithm.swift`): it sits outside the signature, so on an
+  otherwise valid file every byte of it is attacker-chosen.
+- **Both file types' `exp` claims share one tolerance constant**
+  (`Sources/Tamga/Checkout/LicenseFile.swift::clockSkewToleranceSeconds`), so they cannot drift
+  into different grace periods.
+- **The machine-file verifier is tested against files the server itself issued**
+  (`Tests/TamgaTests/Fixtures/MachineFiles/`, driven by `manifest.json`) — not against
+  certificates this repo encoded, which is how a shared misreading of the wire format stayed
+  invisible to CI across the whole SDK fleet.
 - **ECDSA keys are checked for the P-256 curve OID before use**
   (`Sources/Tamga/Crypto/Ecdsa.swift::verify`, via `Sources/Tamga/Crypto/DER.swift::ecNamedCurveOID`).
   CryptoKit's SPKI parser validates coordinate length but not the declared curve.
@@ -286,9 +315,10 @@ deliberate boundaries, not oversights.
 - **`TamgaObjC` exports no public interface yet.** The target builds and can be linked on Apple
   platforms, but the Objective-C wrapper over the Swift API is not written. It is excluded from
   Linux builds, where Objective-C interop does not exist.
-- **Machine files carry no signed claims.** Only license files have `meta` claims and the `+v2`
-  `alg` check; a machine file's binding to one machine comes from the fingerprint being HKDF
-  `info`.
+- **Pre-v2 machine files are rejected, as pre-v2 license files already were.** A `.machine`
+  whose `alg` lacks `+v2`, or whose payload carries no `meta` claims, no longer verifies. Both
+  are genuine breaks for anyone holding an old file — re-issue it. The old behaviour accepted a
+  v1 file and never enforced its expiry.
 
 ## Documentation
 

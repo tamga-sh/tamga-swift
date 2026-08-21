@@ -26,17 +26,51 @@ enum CheckoutFixture {
         json.base64EncodedString()
     }
 
-    /// Builds a base64 `enc` payload for an AES-256-GCM-encrypted file:
-    /// base64 of `nonce || ciphertext || tag`.
+    /// Builds a base64 `enc` payload for an AES-256-GCM-encrypted LICENSE
+    /// file: base64 of `nonce || ciphertext || tag`, matching
+    /// `encode_license_file`'s single-buffer framing.
+    ///
+    /// Not interchangeable with `machineEncryptedEnc` below -- see that
+    /// function, and `EncryptedPayloadDecryptor`, for why the two file types
+    /// genuinely differ.
     static func encryptedEnc(json: Data, key: Data) -> String {
+        let sealed = seal(json: json, key: key)
+        var combined = sealed.nonce
+        combined.append(sealed.ciphertext)
+        combined.append(sealed.tag)
+        return combined.base64EncodedString()
+    }
+
+    /// Builds an `enc` payload for an AES-256-GCM-encrypted MACHINE file:
+    /// `"<nonce_b64>.<cipher_b64>"`, with the tag appended to the ciphertext
+    /// half, matching `FieldEncryption::encrypt`.
+    ///
+    /// The halves are base64-encoded separately, so the result is not itself
+    /// valid base64. Cross-checked against the server-issued fixtures in
+    /// `Tests/TamgaTests/Fixtures/MachineFiles/` rather than trusted on its
+    /// own -- a self-generated fixture that reproduces the SDK's own misreading
+    /// of the format is exactly how the bug this replaces survived.
+    static func machineEncryptedEnc(json: Data, key: Data) -> String {
+        let sealed = seal(json: json, key: key)
+        var ciphertextAndTag = sealed.ciphertext
+        ciphertextAndTag.append(sealed.tag)
+        return "\(sealed.nonce.base64EncodedString()).\(ciphertextAndTag.base64EncodedString())"
+    }
+
+    /// The three parts an AES-GCM seal produces, which the two `enc` framings
+    /// then assemble differently.
+    struct SealedParts {
+        let nonce: Data
+        let ciphertext: Data
+        let tag: Data
+    }
+
+    private static func seal(json: Data, key: Data) -> SealedParts {
         let nonce = Data((0..<AesGcmCipher.nonceLength).map { _ in UInt8.random(in: .min ... .max) })
         guard let (ciphertext, tag) = try? AesGcmCipher.seal(key: key, nonce: nonce, plaintext: json) else {
-            fatalError("CheckoutFixture.encryptedEnc: AES-GCM seal unexpectedly failed")
+            fatalError("CheckoutFixture.seal: AES-GCM seal unexpectedly failed")
         }
-        var combined = nonce
-        combined.append(ciphertext)
-        combined.append(tag)
-        return combined.base64EncodedString()
+        return SealedParts(nonce: nonce, ciphertext: ciphertext, tag: tag)
     }
 
     /// Signs `enc`'s base64 STRING bytes (not decoded bytes) with an Ed25519
@@ -125,8 +159,35 @@ enum CheckoutFixture {
         return Data(json.utf8)
     }
 
-    /// A minimal, valid `{"data": {...}}` machine-resource JSON payload.
-    static func machinePayloadJSON(fingerprint: String = "fp-abc123") -> Data {
+    /// A minimal, valid `{"data": {...}, "meta": {...}}` machine-resource JSON
+    /// payload.
+    ///
+    /// Format v2 puts the claims inside the signed bytes for machine files too
+    /// -- `check_out_machine.rs` signs `{"data": <machine>, "meta": <claims>}`.
+    /// `exp` is omitted unless asked for, matching a checkout made without a
+    /// `ttl`, which the server genuinely allows.
+    static func machinePayloadJSON(
+        fingerprint: String = "fp-abc123",
+        exp: Int64? = nil
+    ) -> Data {
+        let expField = exp.map { ",\"exp\":\($0)" } ?? ""
+        let json = """
+        {"data":{"id":"mach_123","type":"machines","attributes":{
+          "fingerprint":"\(fingerprint)","heartbeat_status":"NOT_STARTED"
+        }},
+        "meta":{"iat":\(machineFixtureIat),"jti":"test-machine-jti","kid":"test-machine-kid"\(expField)}}
+        """
+        return Data(json.utf8)
+    }
+
+    /// The `iat` every `machinePayloadJSON` carries, so tests can express an
+    /// `exp` relative to issue time instead of to a wall clock that moves.
+    static let machineFixtureIat: Int64 = 1_767_225_600
+
+    /// A machine payload with NO `meta` claims -- the shape a pre-v2 file had.
+    /// Only reachable by an attacker who kept a v2 `alg` on a v1 payload, since
+    /// `alg` is outside the signature.
+    static func machinePayloadJSONWithoutClaims(fingerprint: String = "fp-abc123") -> Data {
         let json = """
         {"data":{"id":"mach_123","type":"machines","attributes":{
           "fingerprint":"\(fingerprint)","heartbeat_status":"NOT_STARTED"
