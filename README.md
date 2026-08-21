@@ -146,8 +146,7 @@ whose checkout carried no `ttl` has no `exp` and genuinely never expires.
 > `machine.fingerprint` against your own — the SDK gives you the value but does not enforce the
 > match. This matches the rest of the Tamga SDK fleet.
 
-To supply a trusted
-timestamp instead of the local clock, or to read `iat`/`jti`/`kid` back, use
+To supply a trusted timestamp instead of the local clock, or to read `iat`/`jti`/`kid` back, use
 `verifyWithClaims(scheme:publicKey:licenseKey:fingerprint:now:)`:
 
 ```swift
@@ -218,9 +217,12 @@ Every claim here names the code that implements it.
   (`Tests/TamgaTests/Fixtures/MachineFiles/`, driven by `manifest.json`) — not against
   certificates this repo encoded, which is how a shared misreading of the wire format stayed
   invisible to CI across the whole SDK fleet.
-- **ECDSA keys are checked for the P-256 curve OID before use**
-  (`Sources/Tamga/Crypto/Ecdsa.swift::verify`, via `Sources/Tamga/Crypto/DER.swift::ecNamedCurveOID`).
-  CryptoKit's SPKI parser validates coordinate length but not the declared curve.
+- **ECDSA keys are pinned to P-256 in both accepted encodings**
+  (`Sources/Tamga/Crypto/Ecdsa.swift::importPublicKey`). A key on another curve is refused because
+  its coordinates are not on P-256, whichever encoding it arrives in. An SPKI is additionally
+  checked against the P-256 curve OID (via `Sources/Tamga/Crypto/DER.swift::ecNamedCurveOID`),
+  because CryptoKit's SPKI parser does not validate the declared curve — that catches a key whose
+  label contradicts its coordinates. See [SECURITY.md](SECURITY.md) for which of the two does what.
 - **Everything fails closed**: AEAD tag mismatch throws instead of returning plaintext
   (`Sources/Tamga/Crypto/AesGcm.swift::open`), and a malformed PEM envelope throws the documented
   format error instead of trapping (`Sources/Tamga/Checkout/PemEnvelope.swift::strip`).
