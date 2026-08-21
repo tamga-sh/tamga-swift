@@ -33,6 +33,22 @@ struct PolicyHeartbeatIntervalTests {
         #expect(HeartbeatScheduler.windowSeconds(for: policy) == 600)
     }
 
+    @Test("a zero duration is reported as-is, and made safe by the interval")
+    func zeroDurationIsReportedNotNudged() async throws {
+        let performer = MockPerformer()
+        await performer.enqueue(body: """
+        {"data":{"id":"pol-3","type":"policies","attributes":{"heartbeat_duration":0}}}
+        """)
+
+        let policy = try await TamgaClient.mocked(performer).getLicensePolicy("lic-1")
+
+        // The server does not substitute 600 for a zero, so neither does this --
+        // reporting the window and making it safe are different jobs.
+        #expect(HeartbeatScheduler.windowSeconds(for: policy) == 0)
+        #expect(HeartbeatScheduler.interval(forWindowSeconds: 0)
+            == HeartbeatScheduler.defaultInterval)
+    }
+
     @Test("sizedToPolicy reads the policy and sizes the interval from it")
     func sizedToPolicyReadsThePolicy() async throws {
         let performer = MockPerformer()

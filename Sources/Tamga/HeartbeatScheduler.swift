@@ -89,11 +89,18 @@ public actor HeartbeatScheduler {
     /// The heartbeat window a policy actually imposes, in seconds.
     ///
     /// `policy.heartbeatDuration` when it is set, and the server's own 600s
-    /// fallback when it is not -- mirroring
+    /// fallback when it is `nil` -- mirroring
     /// `Policy::effective_heartbeat_duration_secs` server-side, which is also
     /// what the cull job's `COALESCE(p.heartbeat_duration, 600)` uses.
+    ///
+    /// The mirroring is exact, which means a stored non-positive duration is
+    /// returned as-is rather than being nudged to 600. The server does not
+    /// substitute the fallback for a zero either, and a function documented as
+    /// reporting what the server thinks the window is should not quietly report
+    /// something else. `interval(forWindowSeconds:)` is where a non-positive
+    /// window is made safe.
     public static func windowSeconds(for policy: Policy) -> Int {
-        policy.heartbeatDuration.map { $0 > 0 ? $0 : Int(window) } ?? Int(window)
+        policy.heartbeatDuration ?? Int(window)
     }
 
     /// Builds a scheduler whose interval is sized to the licence's policy
