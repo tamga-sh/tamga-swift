@@ -1,15 +1,49 @@
 import Foundation
 
-/// A machine's heartbeat state. GOTCHA: the 600s (10 min) heartbeat window is
-/// hardcoded server-side, NOT driven by `policy.heartbeat_duration` -- a
-/// future heartbeat-scheduler helper must not derive its ping interval from
-/// that field.
+/// A machine's heartbeat state. GOTCHA: the heartbeat window is
+/// `policy.heartbeat_duration`, and 600s (10 min) is only the fallback the
+/// server applies when that field is null. `HeartbeatScheduler`'s *default*
+/// interval is sized against that fallback; `HeartbeatScheduler.sizedToPolicy`
+/// reads the policy instead and is the right choice on any policy that sets a
+/// shorter window.
 public enum HeartbeatStatus: String, Equatable, Sendable {
     /// Wire value `NOT_STARTED` -- never pinged.
     case notStarted = "NOT_STARTED"
     /// Wire value `ALIVE` -- pinged within the window.
     case alive = "ALIVE"
-    /// Wire value `DEAD` -- window elapsed with no ping.
+    /// Wire value `DEAD` -- the last ping is older than the heartbeat window.
+    ///
+    /// **No ping ever returns this**, and since `getMachine(_:)` exists it is
+    /// no longer exotic either. Which calls can and cannot produce it, in full:
+    ///
+    /// | Call | Can report `.dead`? | Why |
+    /// |---|---|---|
+    /// | `pingHeartbeat` | no | writes `last_heartbeat_at = NOW()`, then judges the machine by that write |
+    /// | `resetHeartbeat` | no | nulls the column, so `.notStarted` |
+    /// | `createMachine` | no | never sets the column, so `.notStarted` |
+    /// | `updateMachine` | **yes** | a write, but it never touches that column |
+    /// | `getMachine`, `listMachines` | **yes** | reads |
+    /// | `checkOutMachine`, `generateOfflineProof` | **yes** | resolve the row through a read |
+    ///
+    /// The durable rule is *what the response was built from*, not "read routes
+    /// versus write routes": a response derived from a timestamp the same
+    /// request just wrote cannot say `.dead`, and `updateMachine` is the write
+    /// that proves the route-list version of that rule wrong. `validate` never
+    /// emits `ValidationCode.heartbeatDead` either way.
+    ///
+    /// What `.dead` must not be is a branch in a tick callback -- against a
+    /// ping it is unreachable code.
+    ///
+    /// **It does not mean the row was culled either.** The status is derived
+    /// from `last_heartbeat_at` against the window and never consults the
+    /// policy's `require_heartbeat`, while the server's cull job early-returns
+    /// unless that flag is set -- and it defaults to `false`. On a default
+    /// policy nothing is ever culled, so a machine reads `DEAD` indefinitely
+    /// while its row and its seat are both still there, and a ping against it
+    /// succeeds and revives it.
+    ///
+    /// So stop a heartbeat loop on no status at all. The signal that the row is
+    /// really gone is a `404` from the ping itself (`TamgaError.isNotFound`).
     case dead = "DEAD"
     /// Wire value `RESURRECTED` -- a new ping arrived after a death event was
     /// already recorded, within the resurrection grace window.
@@ -50,11 +84,25 @@ public struct Machine: Equatable, Sendable {
     public let hostname: String?
     /// The machine's reported core count.
     public let cores: Int?
-    /// The machine's reported memory in bytes.
+    /// The machine's reported memory in **megabytes**, not bytes.
     public let memory: Int64?
-    /// The machine's reported disk in bytes.
+    /// The machine's reported disk in **megabytes**, not bytes.
     public let disk: Int64?
-    /// When the next heartbeat is expected.
+    /// When the next heartbeat is expected -- **and what it is computed against
+    /// depends on which call produced this machine**, which makes it useless as
+    /// a way to discover the heartbeat window.
+    ///
+    /// `createMachine`, `activateMachine`, `pingHeartbeat`, `resetHeartbeat`
+    /// and `updateMachine` return the written row without joining the policy,
+    /// so there this is `lastHeartbeatAt` plus the **600s fallback** whatever
+    /// the policy says. `getMachine`, `listMachines`, `checkOutMachine` and
+    /// `generateOfflineProof` resolve through a query that does join it, so
+    /// there it is `lastHeartbeatAt` plus `policy.heartbeatDuration`.
+    ///
+    /// Two responses for the same machine, seconds apart, can therefore
+    /// disagree, and nothing on the wire says which kind you are holding. To
+    /// size a ping interval, read the window from the policy --
+    /// `HeartbeatScheduler.sizedToPolicy(client:machineId:licenseId:onTick:)`.
     public let nextHeartbeatAt: Date?
     /// When the machine was registered.
     public let created: Date?

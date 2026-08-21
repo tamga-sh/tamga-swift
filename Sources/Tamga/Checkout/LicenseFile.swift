@@ -204,6 +204,13 @@ public struct LicenseFile: Sendable {
 
     private static func decryptPayload(_ payloadBytes: Data, licenseKey: String) throws -> Data {
         let key = Hkdf.deriveLicenseFileKey(licenseKey: licenseKey)
-        return try EncryptedPayloadDecryptor.decrypt(payloadBytes, key: key, context: "Encrypted license file")
+        // Concatenated, NOT dot-separated: `encode_license_file` base64s a
+        // single `nonce ‖ ciphertext ‖ tag` buffer, where the machine-file
+        // encoder delegates to `FieldEncryption::encrypt` and gets two
+        // separately-base64'd halves. Verified against both server encoders --
+        // the two file types really do differ here.
+        return try EncryptedPayloadDecryptor.decryptConcatenated(
+            payloadBytes, key: key, context: "Encrypted license file"
+        )
     }
 }

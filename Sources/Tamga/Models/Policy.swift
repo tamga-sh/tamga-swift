@@ -85,9 +85,16 @@ public enum OverageStrategy: Equatable, Sendable {
     }
 }
 
-/// What happens to a machine row once its heartbeat window elapses.
+/// What happens to a machine row once its heartbeat window elapses -- **only
+/// under a policy whose `requireHeartbeat` is `true`**.
+///
+/// The server's cull job early-returns for any policy that does not require
+/// heartbeats, and `require_heartbeat` defaults to `false`, so on a default
+/// policy this strategy never runs and no machine is ever culled no matter how
+/// long it reports `HeartbeatStatus.dead`.
 public enum HeartbeatCullStrategy: String, Equatable, Sendable {
-    /// Deletes the machine row once dead. The server's default.
+    /// Deletes the machine row once dead, if the policy requires heartbeats at
+    /// all. The server's default value for the column.
     case deactivateDead = "DEACTIVATE_DEAD"
     /// Keeps the dead machine row in place.
     case keepDead = "KEEP_DEAD"
@@ -141,6 +148,58 @@ public enum CheckInInterval: String, Equatable, Sendable {
     case year
 }
 
+/// The legal `policy.expiration_strategy` values, which decide what an expired
+/// licence may still do.
+///
+/// Modeled as constants rather than a Swift enum because the field is free text
+/// on the wire and `Policy.expirationStrategy` is a `String?`; a closed enum
+/// would turn a future server value into a decode failure.
+public enum ExpirationStrategy {
+    /// Default. An expired licence still authenticates; validation reports
+    /// `EXPIRED`.
+    public static let restrictAccess = "RESTRICT_ACCESS"
+    /// An expired licence still authenticates and keeps working.
+    public static let maintainAccess = "MAINTAIN_ACCESS"
+    /// An expired licence still authenticates.
+    public static let allowAccess = "ALLOW_ACCESS"
+    /// **The one that changes the auth gate.** An expired licence stops
+    /// authenticating entirely: every call fails with
+    /// `401 LICENSE_EXPIRED` (`TamgaAPIErrorCode.licenseExpired`) rather than
+    /// returning a validation verdict.
+    public static let revokeAccess = "REVOKE_ACCESS"
+
+    /// Every value the server accepts, in its own order.
+    public static let allValues = [restrictAccess, maintainAccess, allowAccess, revokeAccess]
+}
+
+/// The legal `policy.authentication_strategy` values, which decide which
+/// credential forms a licence accepts.
+///
+/// Constants rather than an enum, for the same reason as `ExpirationStrategy`.
+public enum AuthenticationStrategy {
+    /// Default. Token credentials only -- **license-key auth is refused** with
+    /// `401 LICENSE_NOT_ALLOWED`.
+    public static let token = "TOKEN"
+    /// License-key credentials accepted.
+    public static let license = "LICENSE"
+    /// Both token and license-key credentials accepted.
+    public static let mixed = "MIXED"
+    /// Behaves like `token` at the license-key gate: license-key auth is still
+    /// refused with `401 LICENSE_NOT_ALLOWED`. It is not an "auth disabled"
+    /// switch, despite the name.
+    public static let none = "NONE"
+
+    /// Every value the server accepts, in its own order.
+    public static let allValues = [token, license, mixed, none]
+
+    /// Whether `AuthTransport.licenseKey` / `.basicLicenseKey` can authenticate
+    /// under a policy carrying this strategy. An unrecognized value is treated
+    /// as "no", matching the server's own default-deny at that gate.
+    public static func permitsLicenseKey(_ strategy: String?) -> Bool {
+        strategy == license || strategy == mixed
+    }
+}
+
 /// The policy attached to a license.
 ///
 /// **`max_memory` and `max_disk` are deliberately absent.** The server's GET
@@ -176,9 +235,13 @@ public struct Policy: Equatable, Sendable {
     public let maxUses: Int?
     /// The license duration in seconds, or `nil` when perpetual.
     public let duration: Int64?
-    /// `policy.heartbeat_duration`. **Do not derive a ping interval from
-    /// this.** The server ignores it: the machine heartbeat window is a
-    /// hardcoded 600 seconds.
+    /// `policy.heartbeat_duration`, the machine heartbeat window in seconds.
+    /// The server honours it and falls back to 600 only when it is null, so
+    /// this -- not the fallback -- is what a ping interval should be sized
+    /// against. `HeartbeatScheduler.sizedToPolicy` does exactly that;
+    /// `HeartbeatScheduler.defaultInterval` is still computed against the 600s
+    /// fallback, so a policy setting a shorter window needs either that factory
+    /// or an explicit interval.
     public let heartbeatDuration: Int?
     /// How many `checkInInterval` units make up one check-in period.
     public let checkInIntervalCount: Int?
@@ -194,16 +257,30 @@ public struct Policy: Equatable, Sendable {
     public let heartbeatResurrectionStrategy: HeartbeatResurrectionStrategy
     /// The raw `heartbeat_resurrection_strategy` wire string, for diagnostics.
     public let heartbeatResurrectionStrategyRaw: String?
-    /// Free text server-side: `RESTRICT_ACCESS` (default), `MAINTAIN_ACCESS`,
-    /// `ALLOW_ACCESS`.
+    /// What an expired licence may still do. One of
+    /// `ExpirationStrategy.allValues`; see that type for the behavioural
+    /// difference, which is not cosmetic -- `REVOKE_ACCESS` is the one value
+    /// that stops an expired licence authenticating at all.
     public let expirationStrategy: String?
     /// Free text server-side: `FROM_EXPIRY` (default), `FROM_NOW`.
     public let renewalBasis: String?
-    /// Free text server-side: `TOKEN` (default), `LICENSE`, `MIXED`.
+    /// Which credential forms this policy's licences accept. One of
+    /// `AuthenticationStrategy.allValues`.
+    ///
+    /// **Load-bearing for an embedded client.** `AuthTransport.licenseKey` and
+    /// `.basicLicenseKey` work only under `LICENSE` or `MIXED`; the column
+    /// defaults to `TOKEN`, and `NONE` behaves like `TOKEN` here, so license-key
+    /// auth is off unless a policy turns it on.
     public let authenticationStrategy: String?
     /// Whether licences under this policy must periodically check in.
     public let requireCheckIn: Bool
     /// Whether machines under this policy must send heartbeats.
+    ///
+    /// **This is the flag that decides whether a machine is ever culled.** It
+    /// defaults to `false` server-side and the cull job early-returns whenever
+    /// it is unset, so under a default policy a machine reports
+    /// `HeartbeatStatus.dead` forever while keeping its row and its seat.
+    /// `heartbeatCullStrategy` only takes effect when this is `true`.
     public let requireHeartbeat: Bool
     /// Whether checkout files under this policy are encrypted.
     public let encrypted: Bool

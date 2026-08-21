@@ -78,8 +78,8 @@ struct RateLimitTests {
         #expect(Transport.isRetryable(method: "GET", path: "/anything/at/all"))
     }
 
-    @Test("only the five safe post actions are retryable")
-    func onlyTheFiveSafePostActionsAreRetryable() {
+    @Test("only the safe post actions are retryable")
+    func onlyTheSafePostActionsAreRetryable() {
         #expect(Transport.isRetryable(method: "POST", path: "/licenses/actions/validate-key"))
         #expect(Transport.isRetryable(method: "POST", path: "/licenses/lic-1/actions/validate"))
         #expect(Transport.isRetryable(method: "POST", path: "/licenses/lic-1/actions/check-in"))
@@ -92,14 +92,31 @@ struct RateLimitTests {
         #expect(!Transport.isRetryable(method: "DELETE", path: "/machines/m-1"))
     }
 
-    @Test("heartbeat pings are not treated as the retryable ping action")
-    func heartbeatPingsAreNotTheRetryablePingAction() {
-        // Suffix matching, not substring: `ping-heartbeat` must not be mistaken
-        // for `/actions/ping`.
-        #expect(!Transport.isRetryable(method: "POST",
-                                       path: "/machines/m-1/actions/ping-heartbeat"))
-        #expect(!Transport.isRetryable(method: "POST",
-                                       path: "/machines/m-1/actions/reset-heartbeat"))
+    @Test("both machine heartbeat actions are retryable in their own right")
+    func machineHeartbeatActionsAreRetryable() {
+        // They do not match `/actions/ping` -- matching is by suffix, not
+        // substring -- so they are listed separately. Excluding them meant a
+        // throttled heartbeat was dropped silently and the machine fell past a
+        // window it had tried to meet -- reporting DEAD until its next ping,
+        // and losing its row outright under a policy that requires heartbeats.
+        // Both are bare idempotent state writes, so repeating one cannot burn
+        // a seat.
+        #expect(Transport.isRetryable(method: "POST",
+                                      path: "/machines/m-1/actions/ping-heartbeat"))
+        #expect(Transport.isRetryable(method: "POST",
+                                      path: "/machines/m-1/actions/reset-heartbeat"))
+    }
+
+    @Test("a throttled heartbeat ping is retried rather than dropped")
+    func throttledHeartbeatPingIsRetried() async throws {
+        let performer = MockPerformer()
+        await performer.enqueue(throttled())
+        await performer.enqueue(body: Fixtures.machine)
+
+        let machine = try await TamgaClient.mocked(performer).pingHeartbeat(machineId: "mach-1")
+
+        #expect(machine.id == "mach-1")
+        #expect(await performer.requestCount == 2)
     }
 
     @Test("an absurd retry-after is capped")

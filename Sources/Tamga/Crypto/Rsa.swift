@@ -20,17 +20,39 @@ enum Rsa {
     /// The only modulus size the server issues, and the only one accepted here.
     static let requiredKeySizeInBits = 2048
 
-    /// Imports an RSA public key from X.509 `SubjectPublicKeyInfo` DER bytes,
-    /// rejecting anything that is not exactly 2048 bits.
+    /// Imports an RSA public key from DER bytes, rejecting anything that is
+    /// not exactly 2048 bits.
+    ///
+    /// BOTH PKCS#1 `RSAPublicKey` and X.509 `SubjectPublicKeyInfo` are
+    /// accepted, because `_RSA.Signing.PublicKey(derRepresentation:)` accepts
+    /// both and the server publishes the former: `extract_public_key`
+    /// (`license_signing.rs`) and `key_material.rs` both return whatever
+    /// aws-lc-rs's `RsaKeyPair::public_key().as_der()` yields, which is PKCS#1.
+    /// Confirmed empirically against server-issued fixtures: 270 bytes opening
+    /// `30 82 01 0a 02 82 01 01 00`, parsing to 2048 bits, verifying real
+    /// signatures. This function used to be documented as SPKI-only, which was
+    /// simply wrong about what it accepted; no behaviour changed with the
+    /// correction. Contrast `Ecdsa`, where the equivalent mismatch WAS real and
+    /// did need a fix.
     ///
     /// SECURITY: the size check is the point of this function existing rather
-    /// than the initializer being called inline. `_RSA.Signing.PublicKey`
-    /// happily accepts a 512- or 1024-bit key, and a signature made with one
-    /// verifies correctly -- it is simply far cheaper to forge. Since the key
-    /// reaching here can come from a caller-supplied file, "verifies" must
-    /// also mean "at the strength this protocol requires". Mirrors the same
-    /// explicit check in `tamga-java`'s `Rsa.java`.
-    private static func importPublicKey(fromSubjectPublicKeyInfo der: Data) -> _RSA.Signing.PublicKey? {
+    /// than the initializer being called inline, and it is an equality check
+    /// rather than a floor on purpose -- 2048 is the only size the server
+    /// issues, so anything else means the key did not come from where the
+    /// caller thinks it did.
+    ///
+    /// Be precise about what the initializer does and does not do for you,
+    /// because the wrong version of this note would invite deleting the guard.
+    /// Measured against the pinned swift-crypto 4.5.1: it REJECTS a 1024-bit
+    /// key on its own (so the classic "a weak key still verifies, it is just
+    /// cheap to forge" framing is not what is being defended against here),
+    /// but it ACCEPTS 3072- and 4096-bit keys. Those are the cases this guard
+    /// actually rejects. Do not relax it to `>= 2048` on the theory that a
+    /// bigger key is harmless: the point is that the key material matches the
+    /// account's published key, and a size the server cannot have issued is a
+    /// signal, not a convenience. Mirrors the same explicit check in
+    /// `tamga-java`'s `Rsa.java`.
+    private static func importPublicKey(fromDER der: Data) -> _RSA.Signing.PublicKey? {
         guard let key = try? _RSA.Signing.PublicKey(derRepresentation: der) else {
             return nil
         }
@@ -58,7 +80,7 @@ enum Rsa {
         signature: Data,
         padding: _RSA.Signing.Padding
     ) -> Bool {
-        guard let key = importPublicKey(fromSubjectPublicKeyInfo: publicKeyDER) else {
+        guard let key = importPublicKey(fromDER: publicKeyDER) else {
             return false
         }
         // Fails closed: a malformed key, a wrong-sized key, a malformed

@@ -13,7 +13,7 @@ struct MachineFileTests {
         let json = CheckoutFixture.machinePayloadJSON()
         let enc = CheckoutFixture.plainEnc(json: json)
         let sig = CheckoutFixture.ed25519Sign(enc: enc, privateKey: key)
-        let pem = CheckoutFixture.wrapMachinePEM(enc: enc, sig: sig, alg: "base64+ed25519")
+        let pem = CheckoutFixture.wrapMachinePEM(enc: enc, sig: sig, alg: "base64+ed25519+v2")
 
         let file = try MachineFile.parse(pem)
         #expect(try file.verify(scheme: .ed25519Sign, publicKey: key.publicKey.rawRepresentation))
@@ -25,7 +25,7 @@ struct MachineFileTests {
         let json = CheckoutFixture.machinePayloadJSON()
         let enc = CheckoutFixture.plainEnc(json: json)
         let sig = CheckoutFixture.ecdsaSign(enc: enc, privateKey: key)
-        let pem = CheckoutFixture.wrapMachinePEM(enc: enc, sig: sig, alg: "ecdsa-sha256")
+        let pem = CheckoutFixture.wrapMachinePEM(enc: enc, sig: sig, alg: "base64+ecdsa-p256+v2")
 
         let file = try MachineFile.parse(pem)
         #expect(try file.verify(scheme: .ecdsaP256Sign, publicKey: key.publicKey.derRepresentation))
@@ -38,7 +38,7 @@ struct MachineFileTests {
         let enc = CheckoutFixture.plainEnc(json: json)
         let padding = _RSA.Signing.Padding.insecurePKCS1v1_5
         let sig = CheckoutFixture.rsaSign(enc: enc, privateKey: pair.privateKey, padding: padding)
-        let pem = CheckoutFixture.wrapMachinePEM(enc: enc, sig: sig, alg: "rsa-sha256")
+        let pem = CheckoutFixture.wrapMachinePEM(enc: enc, sig: sig, alg: "base64+rsa-sha256+v2")
 
         let file = try MachineFile.parse(pem)
         #expect(try file.verify(scheme: .rsa2048Pkcs1Sign, publicKey: pair.publicKeySPKI))
@@ -51,7 +51,7 @@ struct MachineFileTests {
         let enc = CheckoutFixture.plainEnc(json: json)
         let padding = _RSA.Signing.Padding.PSS
         let sig = CheckoutFixture.rsaSign(enc: enc, privateKey: pair.privateKey, padding: padding)
-        let pem = CheckoutFixture.wrapMachinePEM(enc: enc, sig: sig, alg: "rsa-pss-sha256")
+        let pem = CheckoutFixture.wrapMachinePEM(enc: enc, sig: sig, alg: "base64+rsa-pss-sha256+v2")
 
         let file = try MachineFile.parse(pem)
         #expect(try file.verify(scheme: .rsa2048Pkcs1PssSign, publicKey: pair.publicKeySPKI))
@@ -63,7 +63,7 @@ struct MachineFileTests {
         let json = CheckoutFixture.machinePayloadJSON()
         let enc = CheckoutFixture.plainEnc(json: json)
         let sig = CheckoutFixture.ed25519Sign(enc: enc, privateKey: key)
-        let pem = CheckoutFixture.wrapMachinePEM(enc: enc, sig: sig, alg: "base64+ed25519")
+        let pem = CheckoutFixture.wrapMachinePEM(enc: enc, sig: sig, alg: "base64+ed25519+v2")
 
         let file = try MachineFile.parse(pem)
         #expect(try file.verify(scheme: .none, publicKey: key.publicKey.rawRepresentation))
@@ -82,7 +82,7 @@ struct MachineFileTests {
         // signature check runs.
         let padding = _RSA.Signing.Padding.insecurePKCS1v1_5
         let sig = CheckoutFixture.rsaSign(enc: enc, privateKey: pair.privateKey, padding: padding)
-        let pem = CheckoutFixture.wrapMachinePEM(enc: enc, sig: sig, alg: "rsa-sha256")
+        let pem = CheckoutFixture.wrapMachinePEM(enc: enc, sig: sig, alg: "base64+rsa-sha256+v2")
 
         let file = try MachineFile.parse(pem)
         let expectedMessage =
@@ -100,7 +100,7 @@ struct MachineFileTests {
         let json = CheckoutFixture.machinePayloadJSON(fingerprint: fingerprint)
         let enc = CheckoutFixture.plainEnc(json: json)
         let sig = CheckoutFixture.ed25519Sign(enc: enc, privateKey: signingKey)
-        let pem = CheckoutFixture.wrapMachinePEM(enc: enc, sig: sig, alg: "base64+ed25519")
+        let pem = CheckoutFixture.wrapMachinePEM(enc: enc, sig: sig, alg: "base64+ed25519+v2")
 
         let file = try MachineFile.parse(pem)
         let machine = try file.verifyAndDecrypt(
@@ -119,9 +119,9 @@ struct MachineFileTests {
         let fingerprint = "machine-fingerprint-xyz"
         let aesKey = Hkdf.deriveMachineFileKey(licenseKey: licenseKey, fingerprint: fingerprint)
         let json = CheckoutFixture.machinePayloadJSON(fingerprint: fingerprint)
-        let enc = CheckoutFixture.encryptedEnc(json: json, key: aesKey)
+        let enc = CheckoutFixture.machineEncryptedEnc(json: json, key: aesKey)
         let sig = CheckoutFixture.ed25519Sign(enc: enc, privateKey: signingKey)
-        let pem = CheckoutFixture.wrapMachinePEM(enc: enc, sig: sig, alg: "aes-256-gcm+ed25519")
+        let pem = CheckoutFixture.wrapMachinePEM(enc: enc, sig: sig, alg: "aes-256-gcm+ed25519+v2")
 
         let file = try MachineFile.parse(pem)
         let machine = try file.verifyAndDecrypt(
@@ -143,9 +143,9 @@ struct MachineFileTests {
         let realFingerprint = "real-fingerprint"
         let aesKey = Hkdf.deriveMachineFileKey(licenseKey: licenseKey, fingerprint: realFingerprint)
         let json = CheckoutFixture.machinePayloadJSON(fingerprint: realFingerprint)
-        let enc = CheckoutFixture.encryptedEnc(json: json, key: aesKey)
+        let enc = CheckoutFixture.machineEncryptedEnc(json: json, key: aesKey)
         let sig = CheckoutFixture.ed25519Sign(enc: enc, privateKey: signingKey)
-        let pem = CheckoutFixture.wrapMachinePEM(enc: enc, sig: sig, alg: "aes-256-gcm+ed25519")
+        let pem = CheckoutFixture.wrapMachinePEM(enc: enc, sig: sig, alg: "aes-256-gcm+ed25519+v2")
 
         let file = try MachineFile.parse(pem)
         // Distinct from signatureVerificationFailed -- the Ed25519 signature
@@ -189,7 +189,7 @@ struct MachineFileTests {
     @Test("verify returns false for a malformed base64 signature")
     func verifyReturnsFalseForMalformedBase64Signature() throws {
         let key = Curve25519.Signing.PrivateKey()
-        let pem = CheckoutFixture.wrapMachinePEM(enc: "AA==", sig: "not valid base64!!!", alg: "base64+ed25519")
+        let pem = CheckoutFixture.wrapMachinePEM(enc: "AA==", sig: "not valid base64!!!", alg: "base64+ed25519+v2")
 
         let file = try MachineFile.parse(pem)
         #expect(try !file.verify(scheme: .ed25519Sign, publicKey: key.publicKey.rawRepresentation))
@@ -200,7 +200,7 @@ struct MachineFileTests {
         let key = Curve25519.Signing.PrivateKey()
         let enc = "not valid base64!!!"
         let sig = CheckoutFixture.ed25519Sign(enc: enc, privateKey: key)
-        let pem = CheckoutFixture.wrapMachinePEM(enc: enc, sig: sig, alg: "base64+ed25519")
+        let pem = CheckoutFixture.wrapMachinePEM(enc: enc, sig: sig, alg: "base64+ed25519+v2")
 
         let file = try MachineFile.parse(pem)
         #expect(throws: TamgaCheckoutError.self) {
@@ -216,7 +216,7 @@ struct MachineFileTests {
         let key = Curve25519.Signing.PrivateKey()
         let enc = Data("not resource json".utf8).base64EncodedString()
         let sig = CheckoutFixture.ed25519Sign(enc: enc, privateKey: key)
-        let pem = CheckoutFixture.wrapMachinePEM(enc: enc, sig: sig, alg: "base64+ed25519")
+        let pem = CheckoutFixture.wrapMachinePEM(enc: enc, sig: sig, alg: "base64+ed25519+v2")
 
         let file = try MachineFile.parse(pem)
         #expect(throws: TamgaCheckoutError.self) {
@@ -227,12 +227,27 @@ struct MachineFileTests {
         }
     }
 
-    @Test("verifyAndDecrypt throws offlineFileFormat for an encrypted payload shorter than nonce+tag")
-    func verifyAndDecryptThrowsForShortEncryptedPayload() throws {
+    /// Every one of these is a malformed encrypted `enc`, and none may reach
+    /// AES-GCM. The single-blob shapes matter most: they are exactly what this
+    /// SDK used to hand the decryptor, and what it must now refuse.
+    @Test(
+        "verifyAndDecrypt throws offlineFileFormat for malformed encrypted enc framings",
+        arguments: [
+            Data([0x01, 0x02, 0x03]).base64EncodedString(),          // one blob, far too short
+            Data(repeating: 0x41, count: 64).base64EncodedString(),  // one blob, plausible length, no dot
+            "AAAAAAAAAAAAAAAA",                                       // valid base64, still no dot
+            "not-base64.also-not-base64",                             // dot pair, neither half decodes
+            "QUFBQUFBQUFBQUFB.",                                      // 12-byte nonce, empty ciphertext half
+            ".QUFBQUFBQUFBQUFB",                                      // empty nonce half
+            "QQ==.QUFBQUFBQUFBQUFBQUFBQQ==",                          // 1-byte nonce, not 12
+            "QUFBQUFBQUFBQUFB.QUFB",                                  // ciphertext shorter than the GCM tag
+            "QUFBQUFBQUFBQUFB.QUFB.QUFB"                              // three parts, not two
+        ]
+    )
+    func verifyAndDecryptThrowsForMalformedEncryptedFraming(enc: String) throws {
         let key = Curve25519.Signing.PrivateKey()
-        let enc = Data([0x01, 0x02, 0x03]).base64EncodedString() // far shorter than 12+16 bytes
         let sig = CheckoutFixture.ed25519Sign(enc: enc, privateKey: key)
-        let pem = CheckoutFixture.wrapMachinePEM(enc: enc, sig: sig, alg: "aes-256-gcm+ed25519")
+        let pem = CheckoutFixture.wrapMachinePEM(enc: enc, sig: sig, alg: "aes-256-gcm+ed25519+v2")
 
         let file = try MachineFile.parse(pem)
         #expect(throws: TamgaCheckoutError.self) {

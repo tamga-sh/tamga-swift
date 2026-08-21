@@ -18,7 +18,16 @@ import FoundationNetworking
 ///
 /// Every method throws `TamgaError`. The distinction between its `.transport`
 /// and `.api` cases matters: a transport failure says nothing about the
-/// license, whereas an API error does.
+/// license, whereas an API error does. Match on `TamgaError.apiCode` against the
+/// constants in `TamgaAPIErrorCode`, never on `detail`.
+///
+/// **Authentication is enforced, and license-key auth is off by default.** The
+/// server only accepts `AuthTransport.licenseKey` / `.basicLicenseKey` when the
+/// license's policy sets `authentication_strategy` to `LICENSE` or `MIXED`; the
+/// column defaults to `TOKEN`, and `NONE` behaves like `TOKEN` at that gate.
+/// Against a default policy every call made with a license key fails with
+/// `401 LICENSE_NOT_ALLOWED` -- a configuration precondition, not a transient
+/// error, so retrying or prompting for another key accomplishes nothing.
 ///
 /// HTTP 429 is retried transparently for safe requests. Machine creation is
 /// deliberately excluded, so a rate-limited activation surfaces rather than
@@ -31,7 +40,21 @@ public struct TamgaClient: Sendable {
     public static let defaultHost = "https://api.tamga.sh"
 
     /// Default per-request timeout.
-    public static let defaultTimeout: TimeInterval = 30
+    ///
+    /// Deliberately longer than the server's own 30-second `TimeoutLayer`. When
+    /// the two are equal a slow request races them, and the local timeout
+    /// usually wins -- which throws away the server's `504` and, with it, the
+    /// `x-request-id` that is the only thing linking a slow-request report back
+    /// to a server-side trace.
+    public static let defaultTimeout: TimeInterval = 45
+
+    /// The page size requested when a caller names none -- the server's maximum.
+    ///
+    /// Sent explicitly rather than relying on the server's own default of 25.
+    /// That default is invisible on the wire (these routes emit neither
+    /// `meta.page` nor `links`), so page fullness is the only pagination signal
+    /// and it cannot be read without knowing the page size that was asked for.
+    public static let defaultPageSize = 100
 
     /// The page size `hasEntitlement` requests -- the server's maximum. It
     /// fetches a single page; see that method's note on the limitation.
@@ -169,12 +192,29 @@ public struct TamgaClient: Sendable {
         return try Self.decodeValidation(data)
     }
 
-    /// Validates a license by id without touching it, returning only the
-    /// verdict.
+    /// Validates a license by id, returning only the verdict.
     ///
     /// This is the one endpoint whose response is **flat**: there is no `data`
     /// envelope and no license resource, just the four validation fields at the
     /// top level.
+    ///
+    /// **This does touch the license.** Earlier revisions of this doc claimed
+    /// the opposite. The route writes `last_validated_at` on every call, with
+    /// exactly one exception: it skips the write when the request carries an
+    /// `Origin` header. It has no `skip_touch` of its own, and the response is
+    /// byte-identical either way, so a caller cannot tell which happened.
+    ///
+    /// Two consequences worth planning around:
+    ///
+    /// - **To validate without side effects, use `validateById` with
+    ///   `ValidateOptions(skipTouch: true)`.** That is the only route that
+    ///   honours the request.
+    /// - **A proxy that injects `Origin` silently disables the write.** This SDK
+    ///   never sets that header itself, but if something in front of it does,
+    ///   `last_validated_at` stays null -- which keeps a never-activated license
+    ///   reporting `INACTIVE` and keeps the check-in-overdue worker firing
+    ///   against `created_at` forever. Checking in does not substitute; that
+    ///   writes a different column.
     public func quickValidate(_ licenseId: String) async throws -> ValidationMeta {
         let data = try await transport.getJSON(["licenses", licenseId, "actions", "validate"])
         return try Self.decode(ValidationMetaWire.self, from: data).flattened
@@ -248,11 +288,20 @@ public struct TamgaClient: Sendable {
         return ValidationResult(license: License.fromResource(envelope.data), meta: meta)
     }
 
+    /// The page size a request actually asks for.
+    ///
+    /// An unset or non-positive `limit` becomes `defaultPageSize` rather than
+    /// being omitted, and an over-large one is clamped to it. Both cases used to
+    /// truncate silently: omitting `limit` let the server apply its own default
+    /// of 25 while `synthesizeCursor` compared the returned count against a
+    /// different number, so a genuinely full page read as a short one and
+    /// pagination stopped after the first 25 rows.
+    static func effectiveLimit(_ options: ListOptions) -> Int {
+        options.limit > 0 ? min(options.limit, defaultPageSize) : defaultPageSize
+    }
+
     static func pageQuery(_ options: ListOptions) -> [URLQueryItem] {
-        var query: [URLQueryItem] = []
-        if options.limit > 0 {
-            query.append(URLQueryItem(name: "limit", value: String(options.limit)))
-        }
+        var query = [URLQueryItem(name: "limit", value: String(effectiveLimit(options)))]
         if let after = options.after {
             query.append(URLQueryItem(name: "page[after]", value: after))
         }
@@ -262,11 +311,15 @@ public struct TamgaClient: Sendable {
     /// Derives the next cursor for a page.
     ///
     /// These endpoints return no cursor metadata or links, so the cursor is
-    /// synthesized: the last item's id, and only when the page came back full.
-    /// A short or empty page means there is nothing further to fetch.
+    /// synthesized: the last item's id, and only when the page came back full
+    /// against the page size actually requested. A short or empty page means
+    /// there is nothing further to fetch.
+    ///
+    /// Only valid where keyset pagination really works -- components, not
+    /// entitlements. See `listEntitlements`.
     static func synthesizeCursor<A>(_ resources: [JSONAPIResource<A>],
                                     options: ListOptions) -> String? {
-        guard options.limit > 0, resources.count >= options.limit else { return nil }
+        guard resources.count >= effectiveLimit(options) else { return nil }
         return resources.last?.id
     }
 }

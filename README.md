@@ -11,7 +11,7 @@ Two independent surfaces, either usable without the other:
 - **`LicenseFile`, `MachineFile` and `MachineProof`** verify `.lic`/`.machine` files and offline
   proofs with **no network access at all**, once your account's public key is embedded in the app.
 
-Runs on macOS 13+, iOS 16+ and Linux. 193 tests, with an 80% line-coverage gate in CI.
+Runs on macOS 13+, iOS 16+ and Linux. 256 tests, with an 80% line-coverage gate in CI.
 
 ## Install
 
@@ -129,8 +129,35 @@ func verifyMachineFile(
 
 `scheme` is `.ed25519Sign` (also the default for a license with no scheme set),
 `.rsa2048Pkcs1Sign`, `.rsa2048Pkcs1PssSign` or `.ecdsaP256Sign`. `.rsa2048JwtRs256` throws
-`TamgaCheckoutError.schemeNotSupported` — machine files are never JWT-signed. RSA and ECDSA keys
-are X.509 `SubjectPublicKeyInfo` DER; Ed25519 keys are raw 32 bytes.
+`TamgaCheckoutError.schemeNotSupported` — machine files are never JWT-signed.
+
+Pass the public key exactly as the API gives it to you. Ed25519 is 32 raw bytes; ECDSA P-256 is
+the 65-byte uncompressed point the account resource publishes (X.509 `SubjectPublicKeyInfo` is
+also accepted); RSA is DER, either PKCS#1 `RSAPublicKey` or `SubjectPublicKeyInfo`.
+
+Machine files are format v2, exactly as license files are: `alg` must end `+v2`, the signed
+payload carries `meta` claims, and `exp` is enforced with the same 60-second tolerance. A file
+whose checkout carried no `ttl` has no `exp` and genuinely never expires.
+
+> **`fingerprint` binds an *encrypted* machine file, not a plain one.** It is HKDF `info`, so an
+> encrypted file issued for another machine fails to decrypt. A plain machine file is signed but
+> not encrypted, so the argument is unused on that path and the file is portable between machines
+> as far as this SDK is concerned. If you accept plain machine files, compare the returned
+> `machine.fingerprint` against your own — the SDK gives you the value but does not enforce the
+> match. This matches the rest of the Tamga SDK fleet.
+
+To supply a trusted timestamp instead of the local clock, or to read `iat`/`jti`/`kid` back, use
+`verifyWithClaims(scheme:publicKey:licenseKey:fingerprint:now:)`:
+
+```swift
+let (machine, claims) = try MachineFile.parse(pem).verifyWithClaims(
+    scheme: scheme,
+    publicKey: publicKey,
+    licenseKey: licenseKey,
+    fingerprint: fingerprint,
+    now: trustedUnixSeconds
+)
+```
 
 ### Offline proofs
 
@@ -179,10 +206,23 @@ Every claim here names the code that implements it.
   payload** (`Sources/Tamga/Checkout/LicenseFile.swift::verify`).
 - **Machine-file verifier dispatch uses the caller-supplied scheme, never the file's own `alg`**
   (`Sources/Tamga/Checkout/MachineFile.swift::verify`) — two distinct RSA schemes share one `alg`
-  suffix on the wire, so trusting it would be an algorithm-confusion hole.
-- **ECDSA keys are checked for the P-256 curve OID before use**
-  (`Sources/Tamga/Crypto/Ecdsa.swift::verify`, via `Sources/Tamga/Crypto/DER.swift::ecNamedCurveOID`).
-  CryptoKit's SPKI parser validates coordinate length but not the declared curve.
+  suffix on the wire, so trusting it would be an algorithm-confusion hole. `alg` is parsed and
+  cross-checked against that scheme, never substring-matched
+  (`Sources/Tamga/Checkout/MachineFileAlgorithm.swift`): it sits outside the signature, so on an
+  otherwise valid file every byte of it is attacker-chosen.
+- **Both file types' `exp` claims share one tolerance constant**
+  (`Sources/Tamga/Checkout/LicenseFile.swift::clockSkewToleranceSeconds`), so they cannot drift
+  into different grace periods.
+- **The machine-file verifier is tested against files the server itself issued**
+  (`Tests/TamgaTests/Fixtures/MachineFiles/`, driven by `manifest.json`) — not against
+  certificates this repo encoded, which is how a shared misreading of the wire format stayed
+  invisible to CI across the whole SDK fleet.
+- **ECDSA keys are pinned to P-256 in both accepted encodings**
+  (`Sources/Tamga/Crypto/Ecdsa.swift::importPublicKey`). A key on another curve is refused because
+  its coordinates are not on P-256, whichever encoding it arrives in. An SPKI is additionally
+  checked against the P-256 curve OID (via `Sources/Tamga/Crypto/DER.swift::ecNamedCurveOID`),
+  because CryptoKit's SPKI parser does not validate the declared curve — that catches a key whose
+  label contradicts its coordinates. See [SECURITY.md](SECURITY.md) for which of the two does what.
 - **Everything fails closed**: AEAD tag mismatch throws instead of returning plaintext
   (`Sources/Tamga/Crypto/AesGcm.swift::open`), and a malformed PEM envelope throws the documented
   format error instead of trapping (`Sources/Tamga/Checkout/PemEnvelope.swift::strip`).
@@ -214,15 +254,119 @@ deliberate boundaries, not oversights.
 - **Clock trust.** A user who moves the clock backwards can revive an expired file. Offline
   verification accepts an explicit `now`, so you can pass a server-supplied timestamp.
 
-**Server-side limitations this SDK inherits**
+**Server-side behaviour this SDK inherits**
 
-- **10 of the 24 `ValidationCode` values are unreachable.** All 24 are modelled;
+- **License-key auth is off by default.** `AuthTransport.licenseKey` authenticates only when the
+  license's policy sets `authentication_strategy` to `LICENSE` or `MIXED`. The column defaults to
+  `TOKEN`, and `NONE` behaves the same way at that gate, so against a default policy every call
+  fails `401 LICENSE_NOT_ALLOWED`. That is a policy configuration precondition — retrying it, or
+  asking the user for a different key, accomplishes nothing.
+- **8 of the 24 `ValidationCode` values are unreachable.** All 24 are modelled;
   `ValidationCode.isReachable` reports which. Do not build behaviour on an unreachable one.
-- **Only four `Scope` fields are enforced** — product, policy, user, environment. The other four
-  are sent, parsed, then ignored.
-- **The heartbeat window is a hardcoded 600s**, not driven by `policy.heartbeat_duration`.
-- **`hasEntitlement` reads a single page** of 100 entitlements, the server maximum.
-- **No auto-update API and no RFC 9421 response-signature verification.**
+- **Six of the eight `Scope` fields are enforced** — product, policy, user, environment,
+  fingerprint and entitlements. `version` and `checksum` are not sent at all: present on the
+  request they make the server reject the whole validate call with `422 SCOPE_NOT_SUPPORTED`.
+- **`scope.entitlements` takes entitlement codes**, compared case-insensitively, satisfied by
+  policy-inherited entitlements as well as directly attached ones.
+- **Machine `memory` and `disk` are megabytes, not bytes.** Reporting bytes inflates the license's
+  running total by 1,048,576× and trips `MEMORY_LIMIT_EXCEEDED` on the next activation.
+- **Policy limits are checked twice**, at machine creation and again at validation, and the
+  policy's overage strategy decides which one refuses. `activateMachine` handles both: a
+  create-time `422` throws `machineOverLimit` with nothing to roll back, and an overage-path
+  rejection deletes the row it created.
+- **The heartbeat window is `policy.heartbeat_duration`, and 600s is only the fallback** the
+  server applies when the policy leaves that field null. `HeartbeatScheduler.window` and the
+  `defaultInterval` derived from it are both computed against the 600s fallback, so on a policy
+  with a shorter window that default ping rate is too slow and machines will report `.dead`. Use
+  `HeartbeatScheduler.sizedToPolicy(client:machineId:licenseId:)`, which reads the window off the
+  licence's policy and sizes the interval from it — one extra request at startup. It reads the
+  policy once and does not track later changes to it.
+- **Every ping interval is floored at one second**, on both schedulers and however you reach them.
+  `0.5` becomes `1`, and so do `0`, a negative and `.nan`; nothing throws, and an interval a real
+  caller would pass is untouched. That is a bound on the request rate, not a rounding convenience:
+  `Task.sleep` honours a sub-second delay *exactly* (measured on Swift 6.3: `0.001` sleeps a mean
+  1.5 ms, about 665 pings a second), so a guard on only the non-positive case bounds nothing. To
+  ask for the default, omit the parameter — passing `0` now means one second, not 200.
+
+  The floor costs nothing a policy can express. `heartbeat_duration` is an integer-**seconds**
+  column, and the server judges liveness on *truncated* whole seconds — `heartbeat_status_within`
+  compares `(now - last_heartbeat_at).num_seconds() <= window_secs`, and `num_seconds()` truncates
+  — so a machine first reads `.dead` at an age of `window_secs + 1`. Every window carries one free
+  second, and a 1s window pinged every 1s has two seconds of slack, not zero. What does degrade is
+  the divisor's promise of two tolerable consecutive losses: window 3 is where floor and divisor
+  first agree, 2 keeps one spare ping, 1 keeps none. The window no interval can hold is `0`, not
+  `1` — its whole grace *is* that free second. `interval(forWindowSeconds:)` therefore substitutes
+  the 600s fallback *window* for a non-positive one before dividing, rather than dividing the raw
+  value and letting the floor catch it: the verdict is `.dead` either way, so the schedule that
+  reaches it with 200× fewer requests wins. A ~333 ms ping would in fact hold a `0` window, and is
+  deliberately not used — it would tie this SDK's request rate to a server implementation artifact.
+  A negative window is unserveable at any rate. The whole interaction is pinned as a table in
+  `HeartbeatFloorTests`.
+- **`Machine.nextHeartbeatAt` cannot be used to discover the window.** What it is computed against
+  depends on which call produced the machine: `createMachine`, `activateMachine`, `pingHeartbeat`,
+  `resetHeartbeat` and `updateMachine` return the written row without the policy joined, so it is
+  `lastHeartbeatAt + 600s` whatever the policy says, while `getMachine`, `listMachines`,
+  `checkOutMachine` and `generateOfflineProof` derive it from the policy. Two responses for the
+  same machine seconds apart can disagree, and nothing on the wire says which you are holding.
+- **`.dead` never comes back from a ping** — but it is ordinary elsewhere. `pingHeartbeat` writes
+  `last_heartbeat_at = NOW()` and then derives the status from that same timestamp, so it answers
+  `.alive` or `.resurrected`; `createMachine` and `resetHeartbeat` answer `.notStarted`; and
+  `validate` never emits `heartbeatDead`. A `.dead` branch in a tick callback is unreachable code.
+  `getMachine`, `listMachines`, `checkOutMachine`, `generateOfflineProof` — and `updateMachine`,
+  a write that never touches the heartbeat column — can all report it. The rule that survives new
+  routes is *what the response was built from*: a status derived from a timestamp the same request
+  just wrote can never be `.dead`.
+- **`.dead` would not mean the machine is gone either.** It means only that the last ping is older
+  than the window. Culling is gated on the policy's `requireHeartbeat`, which is off by default, so
+  on a default policy the row and its seat stay put however long a machine reads `.dead`, and the
+  next ping revives it. So the rule is positive: the loop stops on no status at all —
+  `HeartbeatScheduler` does not, deliberately. The one terminal signal a ping can give is a `404`
+  (`TamgaError.isNotFound`), and that is what should trigger re-activation.
+- **`resetHeartbeat` and `generateOfflineProof` always return `403` to a license-key credential.**
+  Both are role-gated server-side; neither is available to an embedded client.
+- **`quickValidate` writes `last_validated_at`** on every call — except when the request carries an
+  `Origin` header, in which case it silently does not, with an identical response either way. For a
+  genuinely side-effect-free check use `validateById` with `ValidateOptions(skipTouch: true)`.
+- **`listEntitlements` is not paginable.** `page[after]` is ignored on that route, so `nextCursor`
+  is always `nil` and a license with more than 100 effective entitlements cannot be enumerated in
+  full. `hasEntitlement` reads that single page, so a `false` is authoritative only below the
+  ceiling. Component listing is unaffected — keyset pagination works there.
+- **The auto-update check's "no update" answer does not mean "you are up to date".**
+  `checkForUpgrade` returns `.noneAvailable` for two server-side situations the server refuses to
+  distinguish: there is no newer release, *or* there is one and this licence is not entitled to it.
+  Both answer `204`, deliberately, so a denial cannot leak "a newer version exists but you cannot
+  have it". Render it as "no update available" and hang renewal prompts off the licence's own
+  expiry instead. A *suspended* licence is told, though — that one is a `403`.
+- **`getPolicy` is unreachable with a licence key; `getLicensePolicy` is the same resource through
+  a permission a licence token actually holds.** `GET /policies/{id}` asks for `policy.read`,
+  which is not in the licence-token permission set, so it `403`s. `GET /licenses/{id}/policy` asks
+  for `license.read`, which is. Both are exposed and each one's docs point at the other.
+- **`getLicense`, `getLicensePolicy`, `updateMachine` and `deleteMachine` are not scoped to your
+  own licence.** No machine or licence read/write route applies a licence-scope check, and a
+  licence token's default permissions include `license.read`, `machine.read`, `machine.update` and
+  `machine.delete`. So a licence key can read any licence in the account — **including its
+  cleartext `key`** — and update or delete any machine in it. That is server-side and this SDK
+  cannot fix it; it is documented here rather than papered over. Reported upstream.
+- **`listMachines` has no fingerprint filter.** Its only near-equivalent is `query`
+  (`filter[q]`), a `%term%` substring match spanning `name`, `hostname` and `fingerprint` — so
+  compare `Machine.fingerprint` yourself on the results. `reactivateMachine` does exactly that.
+- **`reactivateMachine` resolves a `409 FINGERPRINT_TAKEN` only within your own licence.** All
+  three machine-uniqueness strategies include the caller's own rows, so a genuine re-activation is
+  always found. A conflict raised by the wider scopes — the same fingerprint on a *different*
+  licence — is rethrown unchanged rather than resolved, because that is the seat-sharing those
+  scopes exist to refuse, and a machine resource carries no `license_id` for you to notice it with.
+- **`health()` is the one call that goes out anonymously, deliberately.** The server resolves a
+  request's credential *before* checking whether the route is public, so an unusable credential
+  rejects `/v1/health` too — and in the server's default singleplayer mode a licence key under a
+  default policy is unusable (`401 LICENSE_NOT_ALLOWED`). A probe that fails whenever your
+  credential is the thing under suspicion answers nothing, so this one sends none. Every other
+  route carries the credential you configured.
+- **Nothing on the server ever deletes a process row.** The reaper meant to cull processes past
+  their 30-second window does not run, so a registration this SDK creates and never deletes is
+  permanent — and processes count against `policy.max_processes`. Call `deleteProcess`, or
+  `ProcessHeartbeatScheduler.stopAndDelete()`, on the way out.
+- **No RFC 9421 response-signature verification here.** Artifact download is also absent — the
+  route exists but no role grants the permission it requires, so it `403`s for every client.
 
 **Transport hardening**
 
@@ -241,12 +385,17 @@ deliberate boundaries, not oversights.
 
 **Packaging**
 
+- **A machine's `group` and `owner` sub-resources are not wrapped.**
+  `GET`/`PATCH /machines/{id}/{group,owner}` return `groups` and `users` resources — two domains
+  this SDK models nowhere else, and reassigning a machine's owner or group is an admin-console
+  concern rather than an embedded-client one. Deliberate, and matching `tamga-python`'s call.
 - **`TamgaObjC` exports no public interface yet.** The target builds and can be linked on Apple
   platforms, but the Objective-C wrapper over the Swift API is not written. It is excluded from
   Linux builds, where Objective-C interop does not exist.
-- **Machine files carry no signed claims.** Only license files have `meta` claims and the `+v2`
-  `alg` check; a machine file's binding to one machine comes from the fingerprint being HKDF
-  `info`.
+- **Pre-v2 machine files are rejected, as pre-v2 license files already were.** A `.machine`
+  whose `alg` lacks `+v2`, or whose payload carries no `meta` claims, no longer verifies. Both
+  are genuine breaks for anyone holding an old file — re-issue it. The old behaviour accepted a
+  v1 file and never enforced its expiry.
 
 ## Documentation
 
