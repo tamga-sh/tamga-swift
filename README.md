@@ -276,16 +276,25 @@ deliberate boundaries, not oversights.
   rejection deletes the row it created.
 - **The heartbeat window is `policy.heartbeat_duration`, and 600s is only the fallback** the
   server applies when the policy leaves that field null. `HeartbeatScheduler.window` and the
-  `defaultInterval` derived from it are both computed against the 600s fallback, and the scheduler
-  never reads the policy, so on a policy with a shorter window the default ping rate is too slow and
-  machines will report `.dead`. Callers on such a policy must pass their own `interval`, sized
-  against a window this SDK cannot report back to them: it exposes no `getPolicy`/`getMachine`.
-- **`.dead` never comes back from a ping.** `pingHeartbeat` writes `last_heartbeat_at = NOW()` and
-  then derives the status from that same timestamp, so it answers `.alive` or `.resurrected`;
-  `createMachine` and `resetHeartbeat` answer `.notStarted`; and `validate` never emits
-  `heartbeatDead`. A `.dead` branch in a tick callback is unreachable code. The status is real and
-  is decoded — it is served from a machine *read*, which reaches this SDK through the offline
-  machine file `checkOutMachine` issues — it just is not something a heartbeat loop observes.
+  `defaultInterval` derived from it are both computed against the 600s fallback, so on a policy
+  with a shorter window that default ping rate is too slow and machines will report `.dead`. Use
+  `HeartbeatScheduler.sizedToPolicy(client:machineId:licenseId:)`, which reads the window off the
+  licence's policy and sizes the interval from it — one extra request at startup. It reads the
+  policy once and does not track later changes to it.
+- **`Machine.nextHeartbeatAt` cannot be used to discover the window.** What it is computed against
+  depends on which call produced the machine: `createMachine`, `activateMachine`, `pingHeartbeat`,
+  `resetHeartbeat` and `updateMachine` return the written row without the policy joined, so it is
+  `lastHeartbeatAt + 600s` whatever the policy says, while `getMachine`, `listMachines`,
+  `checkOutMachine` and `generateOfflineProof` derive it from the policy. Two responses for the
+  same machine seconds apart can disagree, and nothing on the wire says which you are holding.
+- **`.dead` never comes back from a ping** — but it is ordinary elsewhere. `pingHeartbeat` writes
+  `last_heartbeat_at = NOW()` and then derives the status from that same timestamp, so it answers
+  `.alive` or `.resurrected`; `createMachine` and `resetHeartbeat` answer `.notStarted`; and
+  `validate` never emits `heartbeatDead`. A `.dead` branch in a tick callback is unreachable code.
+  `getMachine`, `listMachines`, `checkOutMachine`, `generateOfflineProof` — and `updateMachine`,
+  a write that never touches the heartbeat column — can all report it. The rule that survives new
+  routes is *what the response was built from*: a status derived from a timestamp the same request
+  just wrote can never be `.dead`.
 - **`.dead` would not mean the machine is gone either.** It means only that the last ping is older
   than the window. Culling is gated on the policy's `requireHeartbeat`, which is off by default, so
   on a default policy the row and its seat stay put however long a machine reads `.dead`, and the
@@ -301,10 +310,36 @@ deliberate boundaries, not oversights.
   is always `nil` and a license with more than 100 effective entitlements cannot be enumerated in
   full. `hasEntitlement` reads that single page, so a `false` is authoritative only below the
   ceiling. Component listing is unaffected — keyset pagination works there.
-- **No auto-update API and no RFC 9421 response-signature verification here.** The server's
-  `GET /releases/actions/upgrade` does work (it is public, and answers `204` when you are already
-  current); this SDK simply does not wrap it yet. Artifact download is a different story — the route
-  exists but no role grants the permission it requires, so it `403`s for every client.
+- **The auto-update check's "no update" answer does not mean "you are up to date".**
+  `checkForUpgrade` returns `.noneAvailable` for two server-side situations the server refuses to
+  distinguish: there is no newer release, *or* there is one and this licence is not entitled to it.
+  Both answer `204`, deliberately, so a denial cannot leak "a newer version exists but you cannot
+  have it". Render it as "no update available" and hang renewal prompts off the licence's own
+  expiry instead. A *suspended* licence is told, though — that one is a `403`.
+- **`getPolicy` is unreachable with a licence key; `getLicensePolicy` is the same resource through
+  a permission a licence token actually holds.** `GET /policies/{id}` asks for `policy.read`,
+  which is not in the licence-token permission set, so it `403`s. `GET /licenses/{id}/policy` asks
+  for `license.read`, which is. Both are exposed and each one's docs point at the other.
+- **`getLicense`, `getLicensePolicy`, `updateMachine` and `deleteMachine` are not scoped to your
+  own licence.** No machine or licence read/write route applies a licence-scope check, and a
+  licence token's default permissions include `license.read`, `machine.read`, `machine.update` and
+  `machine.delete`. So a licence key can read any licence in the account — **including its
+  cleartext `key`** — and update or delete any machine in it. That is server-side and this SDK
+  cannot fix it; it is documented here rather than papered over. Reported upstream.
+- **`listMachines` has no fingerprint filter.** Its only near-equivalent is `query`
+  (`filter[q]`), a `%term%` substring match spanning `name`, `hostname` and `fingerprint` — so
+  compare `Machine.fingerprint` yourself on the results. `reactivateMachine` does exactly that.
+- **`reactivateMachine` resolves a `409 FINGERPRINT_TAKEN` only within your own licence.** All
+  three machine-uniqueness strategies include the caller's own rows, so a genuine re-activation is
+  always found. A conflict raised by the wider scopes — the same fingerprint on a *different*
+  licence — is rethrown unchanged rather than resolved, because that is the seat-sharing those
+  scopes exist to refuse, and a machine resource carries no `license_id` for you to notice it with.
+- **Nothing on the server ever deletes a process row.** The reaper meant to cull processes past
+  their 30-second window does not run, so a registration this SDK creates and never deletes is
+  permanent — and processes count against `policy.max_processes`. Call `deleteProcess`, or
+  `ProcessHeartbeatScheduler.stopAndDelete()`, on the way out.
+- **No RFC 9421 response-signature verification here.** Artifact download is also absent — the
+  route exists but no role grants the permission it requires, so it `403`s for every client.
 
 **Transport hardening**
 
@@ -323,6 +358,10 @@ deliberate boundaries, not oversights.
 
 **Packaging**
 
+- **A machine's `group` and `owner` sub-resources are not wrapped.**
+  `GET`/`PATCH /machines/{id}/{group,owner}` return `groups` and `users` resources — two domains
+  this SDK models nowhere else, and reassigning a machine's owner or group is an admin-console
+  concern rather than an embedded-client one. Deliberate, and matching `tamga-python`'s call.
 - **`TamgaObjC` exports no public interface yet.** The target builds and can be linked on Apple
   platforms, but the Objective-C wrapper over the Swift API is not written. It is excluded from
   Linux builds, where Objective-C interop does not exist.
