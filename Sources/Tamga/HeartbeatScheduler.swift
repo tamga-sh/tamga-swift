@@ -5,21 +5,40 @@ import Foundation
 /// The server's heartbeat window is the policy's `heartbeat_duration`, falling
 /// back to **600 seconds** only when that field is null.
 ///
-/// **This scheduler assumes the fallback.** `window` is the 600s fallback and
-/// `defaultInterval` is a third of it, which tolerates two consecutive failed
-/// pings only on a policy that takes the fallback. Nothing here reads the
-/// policy -- the SDK exposes no `getPolicy`/`getMachine` to read it with -- so
-/// on a policy with a shorter window the default rate is too slow and the
-/// machine will report `.dead`. Such a caller must pass an explicit `interval`
-/// under a third of its own window -- a window this SDK cannot report, since it
-/// exposes no `getPolicy`/`getMachine`.
+/// **The default interval assumes the fallback; ask for the policy's real
+/// window instead.** `window` is the 600s fallback and `defaultInterval` is a
+/// third of it, which leaves room for two consecutive failed pings only on a
+/// policy that takes the fallback. On a policy with a shorter window that rate
+/// is too slow, the machine falls outside its window, and under a policy that
+/// requires heartbeats its row is culled.
+///
+/// `sizedToPolicy(client:machineId:licenseId:onTick:)` reads the window off the
+/// licence's policy and sizes the interval from that. It costs one extra
+/// request at startup and is the correct default for anyone who does not
+/// already know their own policy:
+///
+/// ```swift
+/// let scheduler = try await HeartbeatScheduler.sizedToPolicy(
+///     client: client, machineId: machine.id, licenseId: licenseId)
+/// await scheduler.start()
+/// ```
+///
+/// Do **not** try to recover the window from `Machine.nextHeartbeatAt`. Which
+/// endpoint produced the machine decides what that field means: `createMachine`,
+/// `pingHeartbeat`, `resetHeartbeat` and `updateMachine` compute it against the
+/// 600s fallback, while `getMachine`, `listMachines`, `checkOutMachine` and
+/// `generateOfflineProof` compute it against the policy. Two responses for the
+/// same machine seconds apart can disagree, and the endpoint a scheduler
+/// naturally calls is the one that is wrong.
 ///
 /// **A tick never reports `.dead`.** The ping writes `last_heartbeat_at =
 /// NOW()` and then derives the status from that same timestamp, so this route
 /// answers `.alive` or `.resurrected` and nothing else. A `.dead` branch in a
-/// tick callback is unreachable code. The status is real, just not reachable
-/// from here: it is served from a machine *read*, which this SDK sees only
-/// through the offline machine file `checkOutMachine` issues.
+/// tick callback is unreachable code. The status is real and is readable
+/// elsewhere -- `getMachine(_:)`, `listMachines`, `checkOutMachine`,
+/// `generateOfflineProof`, and even `updateMachine`, which is a write that
+/// never touches the heartbeat column. It is just not something a ping can
+/// say.
 ///
 /// **So the rule is positive: the loop stops for no status at all** --
 /// not `.dead`, not one this SDK does not recognize. Were a late status to
@@ -48,13 +67,59 @@ import Foundation
 /// and errors are reported rather than swallowed for that reason.
 public actor HeartbeatScheduler {
     /// The server's **fallback** machine heartbeat window, applied when the
-    /// policy leaves `heartbeat_duration` null. A policy that sets that field
-    /// overrides this, and nothing here observes the override.
+    /// policy leaves `heartbeat_duration` null.
+    ///
+    /// A policy that sets that field overrides this. `sizedToPolicy` observes
+    /// the override; the plain initializer does not.
     public static let window: TimeInterval = 600
 
     /// A third of `window`, leaving room for two consecutive failures -- on a
     /// policy that takes the 600s fallback. See the type's note for the rest.
     public static let defaultInterval: TimeInterval = window / 3
+
+    /// The ping interval for a heartbeat window of `seconds`: a third of it,
+    /// which tolerates two consecutive failed pings before the window lapses.
+    ///
+    /// A non-positive window falls back to `defaultInterval` rather than
+    /// producing a zero or negative interval, which would spin.
+    public static func interval(forWindowSeconds seconds: Int) -> TimeInterval {
+        seconds > 0 ? TimeInterval(seconds) / 3 : defaultInterval
+    }
+
+    /// The heartbeat window a policy actually imposes, in seconds.
+    ///
+    /// `policy.heartbeatDuration` when it is set, and the server's own 600s
+    /// fallback when it is not -- mirroring
+    /// `Policy::effective_heartbeat_duration_secs` server-side, which is also
+    /// what the cull job's `COALESCE(p.heartbeat_duration, 600)` uses.
+    public static func windowSeconds(for policy: Policy) -> Int {
+        policy.heartbeatDuration.map { $0 > 0 ? $0 : Int(window) } ?? Int(window)
+    }
+
+    /// Builds a scheduler whose interval is sized to the licence's policy
+    /// rather than to the 600s fallback.
+    ///
+    /// Reads the policy once, at construction, with `getLicensePolicy`. It is
+    /// not re-read: a policy change mid-run is not observed, so a long-lived
+    /// process that expects its policy to be retuned should rebuild the
+    /// scheduler rather than assume this tracks it.
+    ///
+    /// - Throws: whatever `getLicensePolicy` throws. Reading the policy needs
+    ///   the `license.read` permission; a credential without it gets a `403`
+    ///   here, and the fallback-sized initializer is the way through that.
+    public static func sizedToPolicy(
+        client: TamgaClient,
+        machineId: String,
+        licenseId: String,
+        onTick: @escaping @Sendable (Machine?, (any Error)?) async -> Void = { _, _ in }
+    ) async throws -> HeartbeatScheduler {
+        let policy = try await client.getLicensePolicy(licenseId)
+        return HeartbeatScheduler(
+            client: client,
+            machineId: machineId,
+            interval: interval(forWindowSeconds: windowSeconds(for: policy)),
+            onTick: onTick)
+    }
 
     private let client: TamgaClient
     private let machineId: String
@@ -79,6 +144,11 @@ public actor HeartbeatScheduler {
 
     /// Whether the scheduler is currently running.
     public var isRunning: Bool { task != nil }
+
+    /// The interval this scheduler actually settled on. Internal: exposed so a
+    /// test can assert that `sizedToPolicy` read the window rather than
+    /// silently falling back.
+    var configuredInterval: TimeInterval { interval }
 
     /// Starts pinging. The first ping fires after one interval, not
     /// immediately -- a machine has just been activated when a scheduler is
@@ -196,6 +266,26 @@ public actor ProcessHeartbeatScheduler {
     public func stop() {
         task?.cancel()
         task = nil
+    }
+
+    /// Stops pinging and deletes the process registration.
+    ///
+    /// **This is the shutdown path, and skipping it leaks a row permanently.**
+    /// The server's process reaper does not run, so a registration nothing
+    /// deletes survives its own process, its own machine's next boot, and every
+    /// boot after that. Processes count against `policy.maxProcesses`, so the
+    /// accumulation eventually fails a validation with `TOO_MANY_PROCESSES`
+    /// long after the application that caused it stopped running.
+    ///
+    /// Pinging stops first, so a tick cannot race the delete and re-create
+    /// nothing -- a ping against a deleted row is a `404`, not a resurrection.
+    ///
+    /// - Throws: whatever `deleteProcess` throws. A `404`
+    ///   (`TamgaError.isNotFound`) means the row was already gone, which on a
+    ///   shutdown path is usually not worth surfacing.
+    public func stopAndDelete() async throws {
+        stop()
+        try await client.deleteProcess(processId)
     }
 
     /// Sends one ping and reports the outcome.
