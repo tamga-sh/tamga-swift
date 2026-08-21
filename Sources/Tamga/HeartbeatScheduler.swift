@@ -77,13 +77,87 @@ public actor HeartbeatScheduler {
     /// policy that takes the 600s fallback. See the type's note for the rest.
     public static let defaultInterval: TimeInterval = window / 3
 
-    /// The ping interval for a heartbeat window of `seconds`: a third of it,
-    /// which tolerates two consecutive failed pings before the window lapses.
+    /// The shortest interval either scheduler will actually run at: a bound on
+    /// the request rate, not a rounding convenience -- see
+    /// `flooredInterval(_:)`. `ProcessHeartbeatScheduler` shares this rather
+    /// than restating it, so the number has one definition.
+    static let minimumInterval: TimeInterval = 1
+
+    /// Confines an interval to one that cannot flood the licensing server.
     ///
-    /// A non-positive window falls back to `defaultInterval` rather than
-    /// producing a zero or negative interval, which would spin.
+    /// **Measured, not assumed.** `start()` sleeps
+    /// `UInt64(interval * 1_000_000_000)` nanoseconds, and `Task.sleep` honours
+    /// a sub-second delay *exactly*: on Swift 6.3 / macOS 26, `0.5` sleeps a
+    /// mean 531 ms and `0.001` a mean 1.5 ms -- about 665 pings a second, each
+    /// individually valid and correctly authenticated, from every machine
+    /// running that code. An interval of `0` does not sleep at all and turns
+    /// the loop over ~285,000 times a second. So a guard on only the
+    /// non-positive case bounds nothing: it rejects `0` and passes `0.001`,
+    /// which is the more damaging of the two in any process that survives its
+    /// first request. Only a floor bounds the rate.
+    ///
+    /// It costs nothing a policy can express -- `heartbeat_duration` is an
+    /// integer-**seconds** column; `interval(forWindowSeconds:)` has that
+    /// arithmetic and the window cases this does not cover.
+    ///
+    /// A negative or `.nan` interval also becomes the floor, which keeps it
+    /// away from `UInt64(_:)` -- that conversion traps (`SIGILL`) on a
+    /// negative, on `.nan` and on `.infinity` alike. The floor does not save
+    /// `.infinity`, since `max` propagates it, but nor did the guard it
+    /// replaces.
+    static func flooredInterval(_ interval: TimeInterval) -> TimeInterval {
+        // max(1, .nan) is 1: Swift's max returns `y >= x ? y : x` and every
+        // comparison against .nan is false. Verified, not assumed -- the
+        // ternary this replaced relied on the same property.
+        max(minimumInterval, interval)
+    }
+
+    /// The ping interval for a heartbeat window of `seconds`: a third of it,
+    /// floored at `minimumInterval`, with a non-positive window taking the
+    /// server's own 600s fallback before the division rather than after it.
+    ///
+    /// The third tolerates two consecutive failed pings before the window
+    /// lapses. The floor stops a *short* window becoming a spin; the window
+    /// fallback stops a *nonsensical* one becoming an expensive one --
+    /// `heartbeat_duration` is an `INTEGER` with no `CHECK` constraint, so `0`
+    /// and negatives really are storable, and `windowSeconds(for:)` reports
+    /// them verbatim by design.
+    ///
+    /// **Why the two are not the same guard.** A window of `0` cannot be held
+    /// at *any* ping rate: `effective_window_secs()` is
+    /// `policy_heartbeat_duration.map(i64::from).unwrap_or(600)`, replacing
+    /// `NULL` only, so a stored `0` is judged as zero-length and the machine
+    /// reads `DEAD` whatever this returns. Dividing the raw `0` and letting the
+    /// floor catch the result would ping once a second, forever, from every
+    /// machine that policy licenses, to achieve nothing -- the same
+    /// self-inflicted denial of service the floor exists to prevent, reached
+    /// from the other side. Taking the fallback window first reaches the
+    /// identical verdict at 200s: 200x fewer requests. So the floor governs
+    /// every window a policy can *usefully* state, the fallback governs the
+    /// ones it cannot state at all, and a caller-supplied interval keeps the
+    /// plain floor.
+    ///
+    /// **What the floor costs, which is not what it looks like.** The server's
+    /// rule is *not* "dead once age passes the window".
+    /// `heartbeat_status_within` computes
+    /// `let age_secs = (Utc::now() - hb_ts).num_seconds()` then
+    /// `age_secs <= window_secs`, and chrono's `num_seconds()` truncates
+    /// (`Duration::milliseconds(1999).num_seconds() == 1`, verified against the
+    /// API's own chrono 0.4.45). A machine therefore first reads `DEAD` at an
+    /// age of `window_secs + 1` seconds: every window carries one free second,
+    /// and a 1s window pinged every 1s has two seconds of slack, not zero.
+    ///
+    /// What degrades is the divisor's promise of two tolerable consecutive
+    /// losses. Window 3 is where floor and divisor first agree; 2 keeps one
+    /// spare ping, 1 keeps none, and steady state holds the window in all
+    /// three. The window *no* interval can hold is **`0`**, whose entire grace
+    /// *is* that free second -- not `1`, the intuitive but wrong answer. A
+    /// negative window is unholdable too (`age_secs <= -30` is false for every
+    /// age), and neither reaches the floor: both take the fallback window
+    /// above. Pinned as a table in `HeartbeatFloorTests`.
     public static func interval(forWindowSeconds seconds: Int) -> TimeInterval {
-        seconds > 0 ? TimeInterval(seconds) / 3 : defaultInterval
+        let effective = seconds > 0 ? TimeInterval(seconds) : window
+        return flooredInterval(effective / 3)
     }
 
     /// The heartbeat window a policy actually imposes, in seconds.
@@ -97,8 +171,10 @@ public actor HeartbeatScheduler {
     /// returned as-is rather than being nudged to 600. The server does not
     /// substitute the fallback for a zero either, and a function documented as
     /// reporting what the server thinks the window is should not quietly report
-    /// something else. `interval(forWindowSeconds:)` is where a non-positive
-    /// window is made safe.
+    /// something else. `interval(forWindowSeconds:)` is where a short window is
+    /// made safe, by flooring the interval it derives, and where a non-positive
+    /// one is -- by substituting the fallback window for its own division only.
+    /// Neither changes the number reported here.
     public static func windowSeconds(for policy: Policy) -> Int {
         policy.heartbeatDuration ?? Int(window)
     }
@@ -136,7 +212,12 @@ public actor HeartbeatScheduler {
 
     /// Creates a scheduler. It does not start until `start()` is called.
     ///
-    /// A non-positive `interval` falls back to `defaultInterval`.
+    /// **`interval` is floored at one second**, not merely guarded against
+    /// non-positive values: `0.5` becomes `1`, and so do `0`, `-5` and `.nan`.
+    /// Nothing throws. See `flooredInterval(_:)` for why. To ask for the
+    /// default, omit the parameter -- passing `0` no longer means "use 200s",
+    /// it means one second. A window-derived interval is the other case, and
+    /// `interval(forWindowSeconds:)` owns it.
     public init(
         client: TamgaClient,
         machineId: String,
@@ -145,7 +226,7 @@ public actor HeartbeatScheduler {
     ) {
         self.client = client
         self.machineId = machineId
-        self.interval = interval > 0 ? interval : Self.defaultInterval
+        self.interval = Self.flooredInterval(interval)
         self.onTick = onTick
     }
 
@@ -234,6 +315,13 @@ public actor ProcessHeartbeatScheduler {
     private var task: Task<Void, Never>?
 
     /// Creates a scheduler. It does not start until `start()` is called.
+    ///
+    /// **`interval` takes the same one-second floor** as `HeartbeatScheduler`,
+    /// for the same reason: this is the identical unguarded `Task.sleep` one
+    /// type away, so an explicit `0` -- or a `.nan` out of caller-side
+    /// arithmetic -- spins `POST /processes/{id}/actions/ping` exactly as hard.
+    /// The 30s window is hardcoded server-side, so the floor is still thirty
+    /// pings inside it and costs nothing here.
     public init(
         client: TamgaClient,
         processId: String,
@@ -242,12 +330,16 @@ public actor ProcessHeartbeatScheduler {
     ) {
         self.client = client
         self.processId = processId
-        self.interval = interval > 0 ? interval : Self.defaultInterval
+        self.interval = HeartbeatScheduler.flooredInterval(interval)
         self.onTick = onTick
     }
 
     /// Whether the scheduler is currently running.
     public var isRunning: Bool { task != nil }
+
+    /// The interval this scheduler settled on. Internal: exposed so a test can
+    /// assert the floor bound rather than infer it from timing.
+    var configuredInterval: TimeInterval { interval }
 
     /// Starts pinging, with the first ping one interval from now.
     public func start() {

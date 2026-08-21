@@ -332,7 +332,22 @@ specification covers the full set, including analytics/EE items that don't touch
   written row without the policy join, so there it is `last_heartbeat_at + 600s` whatever the
   policy says, while `GET /machines/{id}`, the machine list, check-out and offline-proof all derive
   it from the policy. Two responses for the same machine can disagree; do not size an interval
-  from it.
+  from it. ⚠️ **Both schedulers floor the interval at one second** (`flooredInterval`), which is a
+  bound on the request rate rather than the non-positive guard it replaced — `Task.sleep` honours a
+  sub-second delay exactly, so `0.001` really does issue ~665 pings a second, and a guard that
+  clamps `0` while passing `0.001` bounds nothing. Do **not** narrow it back. The floor costs
+  nothing a policy can express, because liveness is judged on *truncated* whole seconds:
+  `heartbeat_status_within` compares `(now - last).num_seconds() <= window_secs` and
+  `num_seconds()` truncates, so a machine first reads `DEAD` at `window_secs + 1` and every window
+  carries a free second. Do not restate that pessimistically as "DEAD once age passes the window" —
+  that reading makes a 1s window look unserveable at a 1s ping when it has 2s of slack. What the
+  floor does cost is the divisor's two-losses promise (window 3 agrees, 2 keeps one spare, 1 keeps
+  none), and the window no interval can hold is **`0`**, not `1`. Because `0` is unholdable at any
+  rate, `interval(forWindowSeconds:)` substitutes the 600s fallback **window** for a non-positive
+  one *before* dividing — same `.dead` verdict, 200× fewer requests than flooring the divided `0`
+  to 1s would give. Keep `windowSeconds(for:)` faithful regardless; reporting the window and
+  scheduling against it are different jobs. Do not add a window-aware floor to chase `0`; the
+  table in `HeartbeatFloorTests` and its standing caveat are the record.
 - **`DEAD` is not reachable from a ping.** Every write route returns a status that cannot be it:
   `ping-heartbeat` sets `last_heartbeat_at = NOW()` and `heartbeat_status_within` then measures
   `Utc::now() - last_heartbeat_at` against the window (`machines/model.rs:124-146`), so it is always

@@ -98,16 +98,21 @@ struct SchedulerTests {
         {"data":{"id":"mach-1","type":"machines","attributes":{"heartbeat_status":"DEAD"}}}
         """)
         let log = TickLog()
+        // One second, stated outright: it is the floor, so anything shorter
+        // would be silently rewritten to this anyway and the test would be
+        // asserting against a number it does not name.
         let scheduler = HeartbeatScheduler(
-            client: TamgaClient.mocked(performer), machineId: "mach-1", interval: 0.02
+            client: TamgaClient.mocked(performer), machineId: "mach-1", interval: 1
         ) { machine, error in
             await log.record(machine, error)
         }
 
         await scheduler.start()
 
+        // Three ticks need three seconds; the budget is a ceiling, not a wait,
+        // since the loop leaves as soon as the count arrives.
         var observed = 0
-        for _ in 0..<200 where observed < 3 {
+        for _ in 0..<600 where observed < 3 {
             try await Task.sleep(nanoseconds: 20_000_000)
             observed = await log.count
         }
@@ -158,7 +163,7 @@ struct SchedulerTests {
         await performer.enqueue(body: Fixtures.machine)
         let log = TickLog()
         let scheduler = HeartbeatScheduler(
-            client: TamgaClient.mocked(performer), machineId: "mach-1", interval: 0.02
+            client: TamgaClient.mocked(performer), machineId: "mach-1", interval: 1
         ) { machine, error in
             await log.record(machine, error)
         }
@@ -166,9 +171,10 @@ struct SchedulerTests {
         await scheduler.start()
         #expect(await scheduler.isRunning)
 
-        // Wait for a couple of ticks without asserting on exact timing.
+        // Wait for a couple of ticks without asserting on exact timing. One
+        // second is the floor, so this is the fastest a scheduler can run.
         var observed = 0
-        for _ in 0..<200 where observed < 2 {
+        for _ in 0..<600 where observed < 2 {
             try await Task.sleep(nanoseconds: 20_000_000)
             observed = await log.count
         }
@@ -201,15 +207,48 @@ struct SchedulerTests {
         #expect(await scheduler.isRunning == false)
     }
 
-    @Test("a non-positive interval falls back to the default")
-    func nonPositiveIntervalFallsBackToDefault() async {
+    @Test("half a second becomes one second, on both schedulers")
+    func subSecondIntervalIsRaisedToTheFloor() async {
+        // The behaviour change of 2026-08-21, named outright so it is visible
+        // in the suite rather than only in prose. 0.5 used to be honoured
+        // exactly -- `Task.sleep` does not rewrite a sub-second delay the way
+        // `setInterval` does -- which is precisely why a guard on the
+        // non-positive case alone bounded nothing. Two pings a second is a
+        // flood on a window whose shortest expressible value is one second.
         let performer = MockPerformer()
         let client = TamgaClient.mocked(performer)
-        let zero = HeartbeatScheduler(client: client, machineId: "m", interval: 0)
-        let negative = ProcessHeartbeatScheduler(client: client, processId: "p", interval: -5)
+        let machine = HeartbeatScheduler(client: client, machineId: "m", interval: 0.5)
+        let process = ProcessHeartbeatScheduler(client: client, processId: "p", interval: 0.5)
 
-        #expect(await zero.isRunning == false)
-        #expect(await negative.isRunning == false)
+        #expect(await machine.configuredInterval == 1)
+        #expect(await process.configuredInterval == 1)
+    }
+
+    @Test("no interval a caller can pass turns a heartbeat into a spin")
+    func noCallerIntervalCanSpin() async {
+        let performer = MockPerformer()
+        let client = TamgaClient.mocked(performer)
+
+        // 0 and a negative were already guarded, but to `defaultInterval`
+        // (200s); they now take the floor. .nan reaches the same branch --
+        // every comparison against it is false, so `max` returns the floor --
+        // which also keeps it away from `UInt64(_:)`, a conversion that traps
+        // outright on .nan and on a negative alike.
+        for interval in [0, -5, .nan, 0.001, 0.999] as [TimeInterval] {
+            let machine = HeartbeatScheduler(client: client, machineId: "m", interval: interval)
+            let process = ProcessHeartbeatScheduler(
+                client: client, processId: "p", interval: interval)
+
+            #expect(await machine.configuredInterval == 1)
+            #expect(await process.configuredInterval == 1)
+        }
+
+        // An interval a real caller would pass is untouched.
+        let ordinary = HeartbeatScheduler(client: client, machineId: "m", interval: 20)
+        #expect(await ordinary.configuredInterval == 20)
+        #expect(await HeartbeatScheduler(client: client, machineId: "m").configuredInterval == 200)
+        #expect(await ProcessHeartbeatScheduler(
+            client: client, processId: "p").configuredInterval == 10)
     }
 
     @Test("a process scheduler tick reports the process")

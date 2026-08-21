@@ -281,6 +281,27 @@ deliberate boundaries, not oversights.
   `HeartbeatScheduler.sizedToPolicy(client:machineId:licenseId:)`, which reads the window off the
   licence's policy and sizes the interval from it — one extra request at startup. It reads the
   policy once and does not track later changes to it.
+- **Every ping interval is floored at one second**, on both schedulers and however you reach them.
+  `0.5` becomes `1`, and so do `0`, a negative and `.nan`; nothing throws, and an interval a real
+  caller would pass is untouched. That is a bound on the request rate, not a rounding convenience:
+  `Task.sleep` honours a sub-second delay *exactly* (measured on Swift 6.3: `0.001` sleeps a mean
+  1.5 ms, about 665 pings a second), so a guard on only the non-positive case bounds nothing. To
+  ask for the default, omit the parameter — passing `0` now means one second, not 200.
+
+  The floor costs nothing a policy can express. `heartbeat_duration` is an integer-**seconds**
+  column, and the server judges liveness on *truncated* whole seconds — `heartbeat_status_within`
+  compares `(now - last_heartbeat_at).num_seconds() <= window_secs`, and `num_seconds()` truncates
+  — so a machine first reads `.dead` at an age of `window_secs + 1`. Every window carries one free
+  second, and a 1s window pinged every 1s has two seconds of slack, not zero. What does degrade is
+  the divisor's promise of two tolerable consecutive losses: window 3 is where floor and divisor
+  first agree, 2 keeps one spare ping, 1 keeps none. The window no interval can hold is `0`, not
+  `1` — its whole grace *is* that free second. `interval(forWindowSeconds:)` therefore substitutes
+  the 600s fallback *window* for a non-positive one before dividing, rather than dividing the raw
+  value and letting the floor catch it: the verdict is `.dead` either way, so the schedule that
+  reaches it with 200× fewer requests wins. A ~333 ms ping would in fact hold a `0` window, and is
+  deliberately not used — it would tie this SDK's request rate to a server implementation artifact.
+  A negative window is unserveable at any rate. The whole interaction is pinned as a table in
+  `HeartbeatFloorTests`.
 - **`Machine.nextHeartbeatAt` cannot be used to discover the window.** What it is computed against
   depends on which call produced the machine: `createMachine`, `activateMachine`, `pingHeartbeat`,
   `resetHeartbeat` and `updateMachine` return the written row without the policy joined, so it is
