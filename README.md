@@ -334,6 +334,12 @@ deliberate boundaries, not oversights.
   always found. A conflict raised by the wider scopes — the same fingerprint on a *different*
   licence — is rethrown unchanged rather than resolved, because that is the seat-sharing those
   scopes exist to refuse, and a machine resource carries no `license_id` for you to notice it with.
+- **`health()` is the one call that goes out anonymously, deliberately.** The server resolves a
+  request's credential *before* checking whether the route is public, so an unusable credential
+  rejects `/v1/health` too — and in the server's default singleplayer mode a licence key under a
+  default policy is unusable (`401 LICENSE_NOT_ALLOWED`). A probe that fails whenever your
+  credential is the thing under suspicion answers nothing, so this one sends none. Every other
+  route carries the credential you configured.
 - **Nothing on the server ever deletes a process row.** The reaper meant to cull processes past
   their 30-second window does not run, so a registration this SDK creates and never deletes is
   permanent — and processes count against `policy.max_processes`. Call `deleteProcess`, or

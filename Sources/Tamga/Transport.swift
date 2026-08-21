@@ -134,19 +134,16 @@ struct Transport: Sendable {
         return status == 204 ? nil : data
     }
 
-    /// Requests a path that is **not** under `/v1/accounts/{accountId}`.
+    /// Requests a public path that is **not** under `/v1/accounts/{accountId}`,
+    /// **anonymously**.
     ///
-    /// Only `GET /v1/health` needs this. Every other route this SDK calls is
-    /// account-scoped, and the account prefix was unconditional until this
-    /// existed -- which is the whole reason no SDK in the fleet could reach the
-    /// health probe, the server having exempted it from both auth and the
-    /// host-header check.
-    ///
-    /// `segments` is the complete path after the host, so the caller decides
-    /// whether an account appears in it at all.
+    /// Only `GET /v1/health` needs this, and it needs both halves. `segments` is
+    /// the complete path after the host, so no account appears in it -- and no
+    /// credential is attached, which is not an optimization but a correctness
+    /// requirement. See `RouteScope.publicRoot`.
     func getRootJSON(_ segments: [String], query: [URLQueryItem] = []) async throws -> Data {
         try await send(method: "GET", segments: segments, query: query, body: nil,
-                       accept: "application/json", accountScoped: false)
+                       accept: "application/json", scope: .publicRoot)
     }
 
     func postJSON(_ segments: [String], body: JSONValue?) async throws -> Data {
@@ -172,15 +169,17 @@ struct Transport: Sendable {
 
     private func send(method: String, segments: [String], query: [URLQueryItem],
                       body: JSONValue?, accept: String,
-                      accountScoped: Bool = true) async throws -> Data {
+                      scope: RouteScope = .account) async throws -> Data {
         try await sendWithStatus(method: method, segments: segments, query: query, body: body,
-                                 accept: accept, accountScoped: accountScoped).0
+                                 accept: accept, scope: scope).0
     }
 
     private func sendWithStatus(method: String, segments: [String], query: [URLQueryItem],
                                 body: JSONValue?, accept: String,
-                                accountScoped: Bool = true) async throws -> (Data, Int) {
-        let allSegments = accountScoped ? ["v1", "accounts", accountId] + segments : segments
+                                scope: RouteScope = .account) async throws -> (Data, Int) {
+        let allSegments = scope == .account
+            ? ["v1", "accounts", accountId] + segments
+            : segments
         let encodedBody: Data? = try body.map { value in
             do {
                 return try TamgaJSONCoding.encoder.encode(value)
@@ -192,7 +191,8 @@ struct Transport: Sendable {
         let path = "/" + allSegments.joined(separator: "/")
         let retryable = Self.isRetryable(method: method, path: path)
         let request = try buildRequest(method: method, segments: allSegments, query: query,
-                                       body: encodedBody, accept: accept)
+                                       body: encodedBody, accept: accept,
+                                       sendsCredential: scope.sendsCredential)
 
         var attempt = 0
         while true {
@@ -235,8 +235,14 @@ struct Transport: Sendable {
         }
     }
 
+    /// Builds the outgoing request.
+    ///
+    /// `sendsCredential` defaults to `true` so that forgetting it fails in the
+    /// direction every other route already goes -- an omitted argument sends the
+    /// credential, it does not silently drop one.
     private func buildRequest(method: String, segments: [String], query: [URLQueryItem],
-                              body: Data?, accept: String) throws -> URLRequest {
+                              body: Data?, accept: String,
+                              sendsCredential: Bool = true) throws -> URLRequest {
         // The host is validated here rather than in `TamgaClient.init`, so an
         // unusable host surfaces as a real error instead of forcing the
         // initializer to either trap or become throwing.
@@ -260,7 +266,7 @@ struct Transport: Sendable {
         components.percentEncodedPath = basePath + "/" + encoded.joined(separator: "/")
 
         var items = query
-        if let authItem = auth.queryItem {
+        if sendsCredential, let authItem = auth.queryItem {
             items.append(authItem)
         }
         if !items.isEmpty {
@@ -284,7 +290,7 @@ struct Transport: Sendable {
         if body != nil {
             request.setValue("application/vnd.api+json", forHTTPHeaderField: "Content-Type")
         }
-        if let header = auth.header {
+        if sendsCredential, let header = auth.header {
             request.setValue(header.value, forHTTPHeaderField: header.name)
         }
         return request

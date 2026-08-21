@@ -17,11 +17,27 @@ extension TamgaClient {
     /// not the network. If this call fails too, the problem is further out:
     /// DNS, TLS, a proxy, or the server being down.
     ///
-    /// The configured credential is still sent, the same as on every other
-    /// route, because this SDK sends what it was configured with rather than
-    /// deciding per route which calls deserve a credential. The route being
-    /// public means the call succeeds whether or not that credential is any
-    /// good -- which is exactly what makes the diagnostic above work.
+    /// **No credential is sent, and that is what makes the diagnostic work.**
+    /// This is the one route in this SDK that goes out anonymously.
+    ///
+    /// Sending one would defeat the purpose. The server resolves a request's
+    /// credential *before* it checks whether the route is public, and
+    /// propagates a resolution failure straight out
+    /// (`require_auth.rs:120-127`), so an unusable credential rejects a public
+    /// route just as hard as a private one. Worse, whether that resolution
+    /// happens at all on a path with no `{account_id}` segment depends on the
+    /// server's mode, and the exposed one is the default: in **singleplayer**
+    /// -- the server's `#[default]` -- the account id comes from configuration
+    /// rather than the path, so it is present for every path including this
+    /// one, and a licence key under a default policy is refused with
+    /// `401 LICENSE_NOT_ALLOWED` before the public-route check is ever
+    /// consulted.
+    ///
+    /// A probe that fails whenever the caller's credential is the thing under
+    /// suspicion tells you nothing you did not already know. Anonymous, it
+    /// answers whenever the server and the host configuration are sound, which
+    /// is the question being asked. Nothing is given up: the route is public,
+    /// returns no account data, and is exempt from the host check.
     public func health() async throws -> HealthStatus {
         let data = try await transport.getRootJSON(["v1", "health"])
         return try Self.decode(HealthStatusWire.self, from: data).flattened

@@ -207,6 +207,17 @@ specification covers the full set, including analytics/EE items that don't touch
   204 branch. The artifact-download route (`GET /artifacts/{id}/actions/download`) is behind an
   `artifact.download` action no role grants, so it 403s for every real client — genuinely blocked
   upstream, and not wrapped.
+- **`/v1/health` must be called anonymously, and the reason is a middleware ordering bug-shaped
+  behaviour.** `require_authentication` (`auth/require_auth.rs:120-127`) resolves the request's
+  credential with `?` **before** it uses the `is_public_route` result it computed one line earlier,
+  so a resolution *error* rejects a public route. Whether resolution runs at all on a path with no
+  `{account_id}` depends on the mode: multiplayer short-circuits to `Ok(None)`
+  (`auth/context.rs:293-297`), but **singleplayer is `#[default]`** (`config.rs:11-12`) and takes
+  the account id from configuration, so the lookup runs for every path — and a licence key under a
+  default policy returns `Err(401 LICENSE_NOT_ALLOWED)` (`auth/license_lookup.rs:83-84`). Sending a
+  credential would therefore break the probe for exactly the callers it exists to help.
+  `Transport.RouteScope.publicRoot` encodes this; do not "fix" it into sending auth for
+  consistency with the fleet contract's §2.
 - **`GET /policies/{id}` is unreachable under licence-key auth; `GET /licenses/{id}/policy` is not.**
   The first asks for `policy.read`, which is absent from `Role::LicenseToken`'s permission set
   (`authz/mod.rs:236-261`); the second asks for `license.read`, which is present. Both are wrapped
