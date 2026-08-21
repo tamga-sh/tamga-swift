@@ -233,21 +233,6 @@ struct SigningKeySelectionTests {
         #expect(error == .noUsableSigningKey(available: ["broken"]))
     }
 
-    /// A key whose published `kid` disagrees with its own bytes still matches
-    /// the claim by its derived id, so a mislabelled key cannot turn a
-    /// legitimately-signed file into a reported forgery.
-    @Test("a mislabelled key is still matched by its derived id")
-    func mislabelledKeyStillMatchesByDerivedId() throws {
-        let signer = Keypair()
-        let file = try LicenseFile.parse(Self.plainLicense(signedBy: signer))
-        let mislabelled = TamgaSigningKey(kid: "0000000000000000", publicKey: signer.publishedPublicKey)
-
-        let verified = try file.verifyWithClaims(
-            signingKeys: [mislabelled], licenseKey: "K", now: Self.issuedAt)
-        #expect(verified.key.kid == "0000000000000000")
-        #expect(verified.key.keyIdIsSelfConsistent == false)
-    }
-
     // MARK: - Ordering: `alg` and expiry are not bypassed
 
     /// `alg` is checked before any key is looked at, so a file this type cannot

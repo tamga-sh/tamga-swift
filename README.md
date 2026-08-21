@@ -71,10 +71,10 @@ returns an unverified `License`.
 
 ## Release artifacts
 
-An artifact is the payload of a release — the file an updater actually downloads. These became
-reachable from a licence key in `tamga-api@e6d317b`, which granted `artifact.read` and
-`artifact.download` to the licence-token role; before that every call was a `403` and this SDK
-wrapped nothing.
+An artifact is the payload of a release — the file an updater actually downloads. Listing and
+reading artifact metadata were always permitted to a license key; **downloading** was not, until
+`tamga-api@e6d317b` granted `artifact.download` to the license-token role and routed a handler for
+it. All three are wrapped here now.
 
 ```swift
 let page = try await client.listReleaseArtifacts(releaseId: release.id)

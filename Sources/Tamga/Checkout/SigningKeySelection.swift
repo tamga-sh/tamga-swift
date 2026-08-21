@@ -67,10 +67,27 @@ enum SigningKeySelection {
             throw TamgaCheckoutError.signatureVerificationFailed
         }
 
-        // Match on the published id OR the locally derived one. They are the
-        // same value for every key the server has ever published, and accepting
-        // either means a server that mislabelled a key still cannot cause a
-        // file legitimately signed with it to be reported as a forgery.
+        // Match on the published id OR the locally derived one.
+        //
+        // Scope, because the obvious reading overstates it: this cannot decide
+        // whether anything verifies. Every candidate was already tried against
+        // the signature above and every one failed, so all that is left is
+        // which of two errors to report. A file legitimately signed by a
+        // mislabelled key returns from the loop above without any `kid` being
+        // read -- the lenient match is not what rescued it, and narrowing this
+        // to the served id would not endanger it.
+        //
+        // The rest of the fleet matches the served id only and surfaces a
+        // served/computed disagreement through the equivalent of
+        // `TamgaSigningKey.keyIdIsSelfConsistent` instead. Kept lenient here
+        // because on the one input where the two differ -- a file claiming the
+        // derived id of a mislabelled key the account really does hold -- "the
+        // key it names is right here and the signature is still bad" is the
+        // more accurate of the two labels, and changing an error label is a
+        // behaviour change this port has no reason to make on a patch. See
+        // `SigningKeyIdLenienceTests.derivedIdMatchOnlyPicksAnErrorLabel`,
+        // which is the only test in the package that tells the two rules
+        // apart.
         let named = candidates.contains {
             $0.key.kid == claimed || $0.key.computedKeyId == claimed
         }

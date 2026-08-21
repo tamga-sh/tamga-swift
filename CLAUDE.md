@@ -17,7 +17,7 @@ point at <https://tamga.sh> instead.
 ECDSA-P256, RSA PKCS1/PSS, DER), `Checkout/`, `Proof.swift`, and the HTTP surface
 (`TamgaClient`'s 35 methods, `Transport`, `AuthTransport`, the JSON:API error model,
 `EntitlementCache`, both heartbeat schedulers, and the full `Policy` struct) are all implemented
-and tested — 381 tests, ~94.6% line coverage against an 80% gate. (The method count read "31"
+and tested — 385 tests, ~94.6% line coverage against an 80% gate. (The method count read "31"
 before this was recounted mechanically at `git grep -c '^    public func ' Sources/Tamga/TamgaClient*.swift`;
 it was 32 on the previous release and three artifact reads were added on top.)
 
@@ -27,11 +27,13 @@ SDK models nowhere else and which are an admin-console concern; and artifact **w
 (`artifact.create`/`update`/`delete`), which are absent from `Role::LicenseToken` — publishing is
 an operator action, not a client one.
 
-Artifact **read and download** are wrapped as of `tamga-api@e6d317b`, which added `artifact.read`
-and `artifact.download` to `Role::LicenseToken` (`shared/authz/mod.rs:263-264`) and routed a real
-handler. The previous entry here — that download `403`s for every client because no role grants
-the action — was true when written and is now stale; see the artifact bullet under "Endpoint
-notes".
+Artifact **read and download** are now wrapped. `artifact.read` was always in
+`Role::LicenseToken` (`shared/authz/mod.rs:264`) — list and show were reachable and simply
+unwrapped. Only **download** was blocked: `artifact.download` appeared in no role's default list
+and `download_artifact` had no route. `tamga-api@e6d317b` adds that one permission line
+(`shared/authz/mod.rs:265`) and routes the handler. The previous entry here — that download `403`s
+for every client because no role grants the action — was true when written and is now stale; see
+the artifact bullet under "Endpoint notes".
 
 The normative description of the network surface is `../docs/api-client-contract.md`, derived from
 `tamga-go`. Behavioural changes to `TamgaClient`/`Transport` should update that document too, or
@@ -215,9 +217,10 @@ specification covers the full set, including analytics/EE items that don't touch
   case `.noneAvailable` for that reason. A **suspended** licence gets `403` instead, before the
   204 branch.
 - **Artifacts are readable and downloadable with a licence key, and the download does NOT stream
-  bytes.** `artifact.read`/`artifact.download` were added to `Role::LicenseToken` in
-  `tamga-api@e6d317b`; before that every call was a `403` and this SDK deliberately wrapped
-  nothing. Three routes: `GET /releases/{release_id}/artifacts` (keyset, real `(created_at, id)`
+  bytes.** Only `artifact.download` was ever missing — `artifact.read` has been in
+  `Role::LicenseToken` throughout (`shared/authz/mod.rs:264`), so list and show were reachable and
+  merely unwrapped, while download had neither the permission (`:265`, added by
+  `tamga-api@e6d317b`) nor a route. Three routes: `GET /releases/{release_id}/artifacts` (keyset, real `(created_at, id)`
   seek, so `synthesizeCursor` is sound here unlike for entitlements), `GET /artifacts/{id}`, and
   `GET /artifacts/{id}/actions/download`. Three things to keep straight:
   1. **The download answers `303 See Other`** to a presigned storage URL by default. Following it

@@ -7,9 +7,10 @@ import Testing
 import FoundationNetworking
 #endif
 
-/// The artifact read/download surface, reachable from a licence key only since
-/// `tamga-api@e6d317b` granted `artifact.read`/`artifact.download` to
-/// `Role::LicenseToken`.
+/// The artifact read/download surface. `artifact.read` was always in
+/// `Role::LicenseToken`; `artifact.download` was granted (and its route added)
+/// by `tamga-api@e6d317b`, which is what made the third of these three routes
+/// reachable.
 @Suite("Artifacts")
 struct ArtifactTests {
     // MARK: - Fixtures

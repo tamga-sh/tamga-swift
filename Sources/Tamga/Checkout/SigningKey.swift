@@ -145,10 +145,31 @@ public struct TamgaSigningKey: Equatable, Sendable {
     /// Whether the server-published `kid` matches the one derived from
     /// `publicKey`.
     ///
-    /// Key selection matches on **either**, so a server that ever labelled a
-    /// key inconsistently would not silently lose the ability to verify files
-    /// signed with it. A `false` here is worth reporting upstream; it is not
-    /// something a client can fix.
+    /// A `false` here is worth reporting upstream; it is not something a client
+    /// can fix. **It does not affect whether files verify.**
+    ///
+    /// The previous wording here said key selection matches on *either* id "so
+    /// a server that ever labelled a key inconsistently would not silently lose
+    /// the ability to verify files signed with it". The first half is true and
+    /// the second does not follow, so it is corrected rather than kept.
+    /// `SigningKeySelection.resolve` tries every candidate against the
+    /// signature *before* reading any `kid`, and returns on the first that
+    /// passes -- so a mislabelled key verifies a genuine file without the claim
+    /// being consulted at all, and would do so under a served-id-only rule too.
+    /// The ability to verify never depended on the match.
+    ///
+    /// What the either-match does decide is one error label, on a path where
+    /// every key has already failed: whether a file whose claim names the
+    /// *derived* id of a mislabelled key we hold reports
+    /// `TamgaCheckoutError.signatureVerificationFailed` ("the key it names is
+    /// right here and the signature is still bad") or
+    /// `TamgaSigningKeyError.unknownSigningKey` ("fetch the key set again").
+    /// The rest of this SDK fleet matches the served id only and reports the
+    /// served/computed disagreement as its own condition -- which is exactly
+    /// what this property is. Measured, not assumed: narrowing the match to the
+    /// served id leaves every test in this package green except the one written
+    /// to pin this distinction
+    /// (`SigningKeyIdLenienceTests.derivedIdMatchOnlyPicksAnErrorLabel`).
     public var keyIdIsSelfConsistent: Bool { computedKeyId == kid }
 
     /// The decoded public key bytes, or `nil` if `publicKey` is not valid

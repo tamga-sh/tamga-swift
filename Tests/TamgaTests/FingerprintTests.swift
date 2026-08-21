@@ -90,6 +90,33 @@ struct FingerprintTests {
         #expect(FingerprintFixture.loaded.rejected.count == 8)
     }
 
+    /// The fixture is read as `Data` and handed to `JSONDecoder`, which is
+    /// byte-oriented and reads the encoding from the JSON itself. That is
+    /// deliberate: `String(contentsOf:)` **without an explicit encoding
+    /// guesses**, and swift-corelibs-foundation does not have to guess the same
+    /// way Darwin does -- which would make this SDK disagree with *itself*
+    /// across two operating systems, the one failure the shared vectors cannot
+    /// catch because CI would be green on both legs separately.
+    ///
+    /// tamga-python hit exactly this: `Path.read_text()` picked up cp1252 on
+    /// `windows-latest` and the `é` hashed as mojibake. Only the non-ASCII
+    /// vector can detect it -- the other eight are pure ASCII and survive a
+    /// mis-decoding reader unchanged -- so this asserts the bytes directly
+    /// rather than trusting that the vector merely loaded.
+    @Test("the non-ASCII vector survives the file read as UTF-8, not as locale bytes")
+    func fixtureIsReadAsUTF8() throws {
+        let cafe = try #require(vector("non_ascii_value"))
+        let value = try #require(cafe.components.first?.last)
+        // "café" NFC: 63 61 66 C3 A9. Under cp1252 the same file's bytes would
+        // arrive as "cafÃ©" (five scalars) and hash differently.
+        #expect(Array(value.utf8) == [0x63, 0x61, 0x66, 0xC3, 0xA9])
+        #expect(value.unicodeScalars.count == 4)
+        #expect(value == "caf\u{00E9}")
+
+        // And the end-to-end consequence, which is what actually breaks.
+        #expect(try TamgaFingerprint.compute(cafe.parsed) == cafe.fingerprint)
+    }
+
     // MARK: - The three invariants that matter most
 
     /// Ordering is the caller's convenience, not part of the identity. A port
@@ -151,6 +178,28 @@ struct FingerprintTests {
             != "349601954aaa08ad88140d69726ec6e8fc717d853c371e6b633156d56d0b4352")
     }
 
+    /// The sort is case-**sensitive**, because it is on bytes and uppercase
+    /// ASCII (`0x41`-`0x5A`) precedes lowercase (`0x61`-`0x7A`). A
+    /// case-insensitive sort reverses this pair, which is the second mutation
+    /// that bites in every port. No shared vector reaches it -- every label in
+    /// the fixture is lowercase -- so canonical string and hash here were
+    /// computed independently (Python `hashlib`).
+    @Test("the sort is case-sensitive, so an uppercase label sorts first")
+    func sortIsCaseSensitive() throws {
+        let components: [TamgaFingerprint.Component] = [
+            .init(label: "Z", value: "1"),
+            .init(label: "a", value: "2")
+        ]
+        #expect(try TamgaFingerprint.canonical(components)
+            == "tamga-fingerprint-v1\u{1F}Z=1\u{1F}a=2")
+        #expect(try TamgaFingerprint.compute(components)
+            == "d8385e4f48e7396bfaafab43461e389a6575c06115531596b619fe10d916ec2a")
+
+        // What a case-insensitive sort would have produced.
+        #expect(try TamgaFingerprint.compute(components)
+            != "6d5076ca37f7ceb15cad0d373c5ea48b2b70db24bf146bbfb5e62a30cad07c78")
+    }
+
     /// The sort is bytewise on UTF-8, which is the rule as written. Under
     /// *this* rule's own label constraint it is not distinguishable from
     /// sorting the components as `String`s, and that is worth recording rather
@@ -162,9 +211,15 @@ struct FingerprintTests {
     /// label. Measured exhaustively over single-character and prefix-shaped
     /// labels crossed with hostile values: 7,587,405 pairs, zero divergences.
     ///
-    /// Remove the label constraint and divergence is immediate, which is what
-    /// this pins -- `String` calls the two values *equal* where the bytes
-    /// order them. Sorting `[UInt8]` is therefore the spelling that stays
+    /// Note which axis this is on. Bytewise UTF-8 order and code-point order
+    /// are the *same* ordering -- UTF-8 is designed so that byte comparison
+    /// reproduces code-point comparison -- so there is nothing to distinguish
+    /// there and no test should pretend otherwise. Swift's `String` diverges on
+    /// a third axis entirely: canonical equivalence, which can call two
+    /// strings *equal* where their bytes differ.
+    ///
+    /// Remove the label constraint and that divergence is immediate, which is
+    /// what this pins. Sorting `[UInt8]` is therefore the spelling that stays
     /// correct if a future rule ever loosens the label alphabet.
     @Test("String collation and byte order part company once labels are out of the way")
     func stringCollationDivergesOnRawValues() {

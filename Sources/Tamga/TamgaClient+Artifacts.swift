@@ -4,15 +4,16 @@ import Foundation
 ///
 /// ## Why this only appeared now
 ///
-/// Until `tamga-api@e6d317b` these routes were unreachable from an embedded
-/// client and this SDK deliberately did not wrap them. `artifact.download`
-/// appeared in **no** role's default list, and `effective_permissions`
-/// intersects the bearer's set with the token's, taking the bearer side solely
-/// from `role.default_permissions()` -- so granting the token the action could
-/// not rescue it either. Every licence-key call was a `403`. That commit added
-/// `artifact.read` and `artifact.download` to `Role::LicenseToken`
-/// (`shared/authz/mod.rs:263-264`) and routed a real handler, so the flow
-/// works now.
+/// Precisely one of these three routes was blocked, and it is worth stating
+/// exactly which. `artifact.read` has been in `Role::LicenseToken` all along
+/// (`shared/authz/mod.rs:264`), so list and show were always reachable -- this
+/// SDK simply had not wrapped them. `artifact.download` was in **no** role's
+/// default list, and `effective_permissions` intersects the bearer's set with
+/// the token's while taking the bearer side solely from
+/// `role.default_permissions()`, so granting the token the action could not
+/// rescue it either. `download_artifact` also had no route at all.
+/// `tamga-api@e6d317b` adds the single line `artifact.download`
+/// (`shared/authz/mod.rs:265`) and routes the handler.
 ///
 /// Still absent from `Role::LicenseToken`: `artifact.create`, `artifact.update`
 /// and `artifact.delete`. Publishing is an operator action, not a client one,
