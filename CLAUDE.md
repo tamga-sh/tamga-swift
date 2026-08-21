@@ -15,9 +15,14 @@ point at <https://tamga.sh> instead.
 
 **Current state: complete.** `Sources/Tamga/Crypto/` (Ed25519, AES-256-GCM, HKDF-SHA256,
 ECDSA-P256, RSA PKCS1/PSS, DER), `Checkout/`, `Proof.swift`, and the HTTP surface
-(`TamgaClient`'s 20 endpoints, `Transport`, `AuthTransport`, the JSON:API error model,
+(`TamgaClient`'s 31 methods, `Transport`, `AuthTransport`, the JSON:API error model,
 `EntitlementCache`, both heartbeat schedulers, and the full `Policy` struct) are all implemented
-and tested — 256 tests, ~89% line coverage against an 80% gate.
+and tested — 291 tests, ~94% line coverage against an 80% gate.
+
+Deliberately **not** wrapped: a machine's `group`/`owner` sub-resources
+(`GET|PATCH /machines/{id}/{group,owner}`), which return `groups` and `users` resource types this
+SDK models nowhere else and which are an admin-console concern; and artifact download, which
+`403`s for every client because no role grants `artifact.download`.
 
 The normative description of the network surface is `../docs/api-client-contract.md`, derived from
 `tamga-go`. Behavioural changes to `TamgaClient`/`Transport` should update that document too, or
@@ -136,7 +141,10 @@ tamga-swift/
 ├── Sources/
 │   ├── Tamga/                    — public Swift API
 │   │   ├── TamgaClient.swift     — top-level client, split across TamgaClient+*.swift extensions
+│   │   │                            (+Machines, +Entitlements, +Reads, +Reactivation,
+│   │   │                             +Releases, +Health)
 │   │   ├── Transport.swift       — HTTPRequestPerforming seam, URL/auth/headers, 429 retry
+│   │   ├── Transport+Helpers.swift — the pure half: version sanitizing, path encoding, backoff
 │   │   ├── AuthTransport.swift   — the seven auth forms
 │   │   ├── EntitlementCache.swift, HeartbeatScheduler.swift — actors
 │   │   ├── Errors.swift          — TamgaError (API) and TamgaCheckoutError (offline)
@@ -145,7 +153,8 @@ tamga-swift/
 │   │   ├── CanonicalJson.swift   — recursive alphabetical-key-sorted JSON writer, for Proof
 │   │   ├── Crypto/                — Ed25519, AesGcm, Hkdf, Ecdsa, Rsa, DER — see "Crypto Architecture" above
 │   │   ├── Models/                — License, Machine, Component, MachineProcess, Entitlement,
-│   │   │                             Policy, Scope, ValidationCode/Meta, Page, requests/results
+│   │   │                             Policy, Release, HealthStatus, Scope, ValidationCode/Meta,
+│   │   │                             Page (keyset) + OffsetPage (machines only), requests/results
 │   │   └── Checkout/               — LicenseFile, MachineFile, PemEnvelope (PEM parse/verify/decrypt)
 │   └── TamgaObjC/                — thin Objective-C interop wrapper over Tamga
 ├── Tests/TamgaTests/             — Swift Testing (import Testing, NOT XCTest)
@@ -184,16 +193,55 @@ no-op or advertise a guarantee the server doesn't enforce. Only the gaps relevan
 scope (license validation, checkout, machine management, offline proof) are listed — the
 specification covers the full set, including analytics/EE items that don't touch this SDK at all.
 
-- **The auto-update endpoint works; the old "it 500s" directive was wrong.** `GET
-  /releases/actions/upgrade` routes to a live handler and is **public** (optional auth). The real
-  constraints are different ones: an up-to-date caller gets `204` with an empty body (do not
-  confuse that with a decode failure); omitting `constraint` defaults to patch-only (`~x.y.z`);
-  omitting `channel` matches **every** channel including `alpha`/`dev`; and `product` is the
-  product **UUID**, not its code. The artifact-download route exists too
-  (`GET /artifacts/{id}/actions/download`), but is behind an `artifact.download` action that no
-  role currently grants, so it 403s for every real client — that part is genuinely blocked
-  upstream. This SDK does not wrap either endpoint yet; that is a scope decision, not a
-  server limitation.
+- **The auto-update endpoint works, and its `204` means two things.** `GET
+  /releases/actions/upgrade` routes to a live handler and is **public** (optional auth); it is
+  wrapped as `checkForUpgrade`. Four query parameters are REQUIRED — `product` (the product
+  **UUID**, not its code), `platform`, `filetype`, `version` — and axum's plain `Query` extractor
+  rejects a missing one with a **plain-text 400**, not a JSON:API error document, so the code
+  degrades to the synthetic `UNKNOWN`. Optional: `constraint` (omitting it defaults to patch-only
+  `~x.y.z`, not "any newer") and `channel` (omitting it matches **every** channel including
+  `alpha`/`dev`). `204 No Content` is returned both when there is no newer release and when there
+  IS one the licence is not entitled to — deliberately, so a denial cannot leak "a newer version
+  exists but you cannot have it". Never report it as "up to date"; `UpgradeCheckResult` names the
+  case `.noneAvailable` for that reason. A **suspended** licence gets `403` instead, before the
+  204 branch. The artifact-download route (`GET /artifacts/{id}/actions/download`) is behind an
+  `artifact.download` action no role grants, so it 403s for every real client — genuinely blocked
+  upstream, and not wrapped.
+- **`/v1/health` must be called anonymously, and the reason is a middleware ordering bug-shaped
+  behaviour.** `require_authentication` (`auth/require_auth.rs:120-127`) resolves the request's
+  credential with `?` **before** it uses the `is_public_route` result it computed one line earlier,
+  so a resolution *error* rejects a public route. Whether resolution runs at all on a path with no
+  `{account_id}` depends on the mode: multiplayer short-circuits to `Ok(None)`
+  (`auth/context.rs:293-297`), but **singleplayer is `#[default]`** (`config.rs:11-12`) and takes
+  the account id from configuration, so the lookup runs for every path — and a licence key under a
+  default policy returns `Err(401 LICENSE_NOT_ALLOWED)` (`auth/license_lookup.rs:83-84`). Sending a
+  credential would therefore break the probe for exactly the callers it exists to help.
+  `Transport.RouteScope.publicRoot` encodes this; do not "fix" it into sending auth for
+  consistency with the fleet contract's §2.
+- **`GET /policies/{id}` is unreachable under licence-key auth; `GET /licenses/{id}/policy` is not.**
+  The first asks for `policy.read`, which is absent from `Role::LicenseToken`'s permission set
+  (`authz/mod.rs:236-261`); the second asks for `license.read`, which is present. Both are wrapped
+  (`getPolicy`, `getLicensePolicy`) and each one's doc points at the other. Do not collapse them.
+- **Nothing licence-scopes the licence and machine routes.** `require_license_scope` is called
+  only from the four validate/checkout handlers. `GET /licenses/{id}` returns `attributes.key` in
+  cleartext and gates only on `license.read`; the machine routes gate on `machine.read`/`.update`/
+  `.delete`, all of which `Role::LicenseToken` holds by default. So a licence key can read any
+  licence in the account (key included) and update or delete any machine in it. Filed upstream —
+  do not write docs implying that surface is scoped, and do not try to "fix" it client-side.
+- **The machine collection is OFFSET-paginated; its sub-collections are not.** `GET /machines`
+  emits `meta.page{number,size,total,totalPages}` and takes `page[number]`/`page[size]` (aliases
+  `page`/`limit`). `GET /machines/{id}/components` and `/processes` take bare `limit` plus
+  `page[after]` and emit no `meta` at all. Do not unify them. `GET /machines` has **no fingerprint
+  filter** — `filter[q]` is `%term%` ILIKE across `name`/`hostname`/`fingerprint`, truncated at
+  200 chars; multi-value filters are comma-joined inside one value, because a repeated key
+  silently collapses to its last occurrence.
+- **A machine resource carries no `license_id` and no `relationships`.** No serializer in the API
+  emits a relationships block. So nothing client-side can tell which licence a machine belongs to,
+  which is why `reactivateMachine`'s fingerprint lookup is account-wide and why
+  `Scope(fingerprint:)` is the only membership check available.
+- **The process reaper is dead code.** No server job deletes a process row, ever, and processes
+  count against `policy.max_processes`. `deleteProcess` / `ProcessHeartbeatScheduler.stopAndDelete`
+  are the only things that clean up.
 - **Auth IS enforced server-side, and license-key auth is off by default.** The old "no auth is
   enforced" note was false. `Authorization: License <key>` only authenticates when the license's
   policy sets `authentication_strategy` to `LICENSE` or `MIXED`; the column defaults to `'TOKEN'`,
@@ -276,24 +324,42 @@ specification covers the full set, including analytics/EE items that don't touch
   `Policy::effective_heartbeat_duration_secs` and the cull job's `COALESCE(p.heartbeat_duration,
   600)` agree on that, and `heartbeat_status`/`next_heartbeat_at` are both computed from it. The
   process heartbeat window really is a hardcoded 30s, with no resurrection grace period at all.
-  `HeartbeatScheduler.window`/`defaultInterval` are still sized against the 600s fallback and
-  nothing here reads the policy, so on a policy with a shorter window the default ping rate is too
-  slow and machines report `DEAD`. Making the scheduler adapt needs a `getPolicy`/`getMachine` this
-  SDK does not expose yet; until then a caller on such a policy has to pass its own interval. No
-  field here carries the window outright, and `Machine.nextHeartbeatAt` only half-substitutes:
-  `create`, `ping-heartbeat` and `reset-heartbeat` return the written row without the policy join,
-  so there it is `last_heartbeat_at + 600s` whatever the policy says. Only check-out and
-  offline-proof, which read through `find_by_id`, derive it from the policy.
+  `HeartbeatScheduler.window`/`defaultInterval` are still sized against the 600s fallback, but
+  `HeartbeatScheduler.sizedToPolicy(client:machineId:licenseId:)` now reads the window off
+  `getLicensePolicy` and sizes the interval from it — that is the right default on any policy that
+  sets a shorter window. No field carries the window outright, and `Machine.nextHeartbeatAt` only
+  half-substitutes: `create`, `ping-heartbeat`, `reset-heartbeat` and **`PATCH`** return the
+  written row without the policy join, so there it is `last_heartbeat_at + 600s` whatever the
+  policy says, while `GET /machines/{id}`, the machine list, check-out and offline-proof all derive
+  it from the policy. Two responses for the same machine can disagree; do not size an interval
+  from it. ⚠️ **Both schedulers floor the interval at one second** (`flooredInterval`), which is a
+  bound on the request rate rather than the non-positive guard it replaced — `Task.sleep` honours a
+  sub-second delay exactly, so `0.001` really does issue ~665 pings a second, and a guard that
+  clamps `0` while passing `0.001` bounds nothing. Do **not** narrow it back. The floor costs
+  nothing a policy can express, because liveness is judged on *truncated* whole seconds:
+  `heartbeat_status_within` compares `(now - last).num_seconds() <= window_secs` and
+  `num_seconds()` truncates, so a machine first reads `DEAD` at `window_secs + 1` and every window
+  carries a free second. Do not restate that pessimistically as "DEAD once age passes the window" —
+  that reading makes a 1s window look unserveable at a 1s ping when it has 2s of slack. What the
+  floor does cost is the divisor's two-losses promise (window 3 agrees, 2 keeps one spare, 1 keeps
+  none), and the window no interval can hold is **`0`**, not `1`. Because `0` is unholdable at any
+  rate, `interval(forWindowSeconds:)` substitutes the 600s fallback **window** for a non-positive
+  one *before* dividing — same `.dead` verdict, 200× fewer requests than flooring the divided `0`
+  to 1s would give. Keep `windowSeconds(for:)` faithful regardless; reporting the window and
+  scheduling against it are different jobs. Do not add a window-aware floor to chase `0`; the
+  table in `HeartbeatFloorTests` and its standing caveat are the record.
 - **`DEAD` is not reachable from a ping.** Every write route returns a status that cannot be it:
   `ping-heartbeat` sets `last_heartbeat_at = NOW()` and `heartbeat_status_within` then measures
   `Utc::now() - last_heartbeat_at` against the window (`machines/model.rs:124-146`), so it is always
   `ALIVE` or `RESURRECTED`; `reset-heartbeat` nulls the column and `POST /machines` never sets it,
   so both are `NOT_STARTED`; and `validate` never constructs `ValidationCode::HeartbeatDead` — the
-  variant exists in `licenses/model.rs:201` with zero construction sites. `DEAD` is served from a
-  machine *read*, which reaches this SDK only through `check-out` and `generate-offline-proof`
-  (both resolve the row via `queries::find_by_id` rather than writing it); `GET /machines/{id}` and
-  the list route are M11/M36 and are not wrapped here. Do not write a `DEAD` branch against a ping
-  response — it is unreachable — and do not delete the enum case or the field over it.
+  variant exists in `licenses/model.rs:201` with zero construction sites. `DEAD` is served from
+  anything that reads the stored row: `check-out`, `generate-offline-proof`, and now
+  `GET /machines/{id}` and `GET /machines`, all wrapped here. **`PATCH /machines/{id}` is the
+  counterexample to the route-shaped version of this rule** — it is a write, but it never touches
+  `last_heartbeat_at`, so it judges an untouched timestamp and can answer `DEAD`. State the rule as
+  *what the response was built from*, never as a list of write routes. Do not write a `DEAD` branch
+  against a ping response — it is unreachable — and do not delete the enum case or the field.
 - **`DEAD` would not mean the row was culled either, and on a default policy nothing is ever
   culled.** `require_heartbeat` defaults to `FALSE`, the cull job early-returns for any policy that
   does not set it, and `Machine::heartbeat_status*` never consults the flag at all — it derives

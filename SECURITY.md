@@ -19,11 +19,24 @@ full rationale and primitive-by-primitive mapping. The highest-risk code lives i
 - [`Sources/Tamga/CanonicalJson.swift`](Sources/Tamga/CanonicalJson.swift) — the canonical JSON serializer the offline-proof signature covers.
 
 The HTTP surface is **in** scope, and this section used to say the opposite. `TamgaClient`,
-`Transport` and the JSON:API error model were empty placeholders when this policy was written; as
-of 1.2.0 they are implemented and tested (20 endpoints, auth, 429 retry, `EntitlementCache`, the
-heartbeat schedulers). Reports about `Transport`'s URL construction and path escaping, auth header
+`Transport` and the JSON:API error model were empty placeholders when this policy was written;
+they are now implemented and tested — 31 client methods, auth, 429 retry, `EntitlementCache`, the
+heartbeat schedulers. Reports about `Transport`'s URL construction and path escaping, auth header
 and query-parameter handling, retry behaviour, or response decoding are all in scope — not just
 "files and strings the caller already holds".
+
+Two properties of that surface are **server-side** and are documented rather than fixed here, so
+please do not report them against this repository:
+
+- `GET /licenses/{id}` and `GET /licenses/{id}/policy` apply no licence-scope confinement, and the
+  licence resource carries `attributes.key` in cleartext. A licence token holding `license.read` —
+  which is its default — can read any licence in the same account, key included.
+- No machine route applies a licence-scope check either, and a licence token's defaults include
+  `machine.read`, `machine.update` and `machine.delete`. So a licence key can update or delete any
+  machine in the account.
+
+Both are filed upstream. `getLicense(_:)`, `updateMachine(_:options:)` and `deleteMachine(_:)`
+say so in their own doc comments; nothing in this SDK describes that surface as scoped.
 
 ## Offline license file format v2 (compatibility warning)
 
@@ -40,8 +53,10 @@ cryptographically valid forever, because whoever holds the file can simply drop 
 
 ## Supported Versions
 
-The current release series is 1.x (latest tag: `v1.2.0`). The two most recent minor versions
-receive security patches; older ones do not.
+The current release series is 1.x. The two most recent minor versions receive security patches;
+older ones do not. The exact latest tag is on the
+[releases page](https://github.com/tamga-sh/tamga-swift/releases) — naming it here has gone stale
+once already.
 
 ## Reporting a Vulnerability
 

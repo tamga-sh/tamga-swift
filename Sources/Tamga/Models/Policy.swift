@@ -238,9 +238,10 @@ public struct Policy: Equatable, Sendable {
     /// `policy.heartbeat_duration`, the machine heartbeat window in seconds.
     /// The server honours it and falls back to 600 only when it is null, so
     /// this -- not the fallback -- is what a ping interval should be sized
-    /// against. `HeartbeatScheduler` does not do that: its `defaultInterval`
-    /// is computed against the 600s fallback, so a policy setting a shorter
-    /// window needs an explicit interval.
+    /// against. `HeartbeatScheduler.sizedToPolicy` does exactly that;
+    /// `HeartbeatScheduler.defaultInterval` is still computed against the 600s
+    /// fallback, so a policy setting a shorter window needs either that factory
+    /// or an explicit interval.
     public let heartbeatDuration: Int?
     /// How many `checkInInterval` units make up one check-in period.
     public let checkInIntervalCount: Int?

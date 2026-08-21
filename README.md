@@ -276,16 +276,46 @@ deliberate boundaries, not oversights.
   rejection deletes the row it created.
 - **The heartbeat window is `policy.heartbeat_duration`, and 600s is only the fallback** the
   server applies when the policy leaves that field null. `HeartbeatScheduler.window` and the
-  `defaultInterval` derived from it are both computed against the 600s fallback, and the scheduler
-  never reads the policy, so on a policy with a shorter window the default ping rate is too slow and
-  machines will report `.dead`. Callers on such a policy must pass their own `interval`, sized
-  against a window this SDK cannot report back to them: it exposes no `getPolicy`/`getMachine`.
-- **`.dead` never comes back from a ping.** `pingHeartbeat` writes `last_heartbeat_at = NOW()` and
-  then derives the status from that same timestamp, so it answers `.alive` or `.resurrected`;
-  `createMachine` and `resetHeartbeat` answer `.notStarted`; and `validate` never emits
-  `heartbeatDead`. A `.dead` branch in a tick callback is unreachable code. The status is real and
-  is decoded — it is served from a machine *read*, which reaches this SDK through the offline
-  machine file `checkOutMachine` issues — it just is not something a heartbeat loop observes.
+  `defaultInterval` derived from it are both computed against the 600s fallback, so on a policy
+  with a shorter window that default ping rate is too slow and machines will report `.dead`. Use
+  `HeartbeatScheduler.sizedToPolicy(client:machineId:licenseId:)`, which reads the window off the
+  licence's policy and sizes the interval from it — one extra request at startup. It reads the
+  policy once and does not track later changes to it.
+- **Every ping interval is floored at one second**, on both schedulers and however you reach them.
+  `0.5` becomes `1`, and so do `0`, a negative and `.nan`; nothing throws, and an interval a real
+  caller would pass is untouched. That is a bound on the request rate, not a rounding convenience:
+  `Task.sleep` honours a sub-second delay *exactly* (measured on Swift 6.3: `0.001` sleeps a mean
+  1.5 ms, about 665 pings a second), so a guard on only the non-positive case bounds nothing. To
+  ask for the default, omit the parameter — passing `0` now means one second, not 200.
+
+  The floor costs nothing a policy can express. `heartbeat_duration` is an integer-**seconds**
+  column, and the server judges liveness on *truncated* whole seconds — `heartbeat_status_within`
+  compares `(now - last_heartbeat_at).num_seconds() <= window_secs`, and `num_seconds()` truncates
+  — so a machine first reads `.dead` at an age of `window_secs + 1`. Every window carries one free
+  second, and a 1s window pinged every 1s has two seconds of slack, not zero. What does degrade is
+  the divisor's promise of two tolerable consecutive losses: window 3 is where floor and divisor
+  first agree, 2 keeps one spare ping, 1 keeps none. The window no interval can hold is `0`, not
+  `1` — its whole grace *is* that free second. `interval(forWindowSeconds:)` therefore substitutes
+  the 600s fallback *window* for a non-positive one before dividing, rather than dividing the raw
+  value and letting the floor catch it: the verdict is `.dead` either way, so the schedule that
+  reaches it with 200× fewer requests wins. A ~333 ms ping would in fact hold a `0` window, and is
+  deliberately not used — it would tie this SDK's request rate to a server implementation artifact.
+  A negative window is unserveable at any rate. The whole interaction is pinned as a table in
+  `HeartbeatFloorTests`.
+- **`Machine.nextHeartbeatAt` cannot be used to discover the window.** What it is computed against
+  depends on which call produced the machine: `createMachine`, `activateMachine`, `pingHeartbeat`,
+  `resetHeartbeat` and `updateMachine` return the written row without the policy joined, so it is
+  `lastHeartbeatAt + 600s` whatever the policy says, while `getMachine`, `listMachines`,
+  `checkOutMachine` and `generateOfflineProof` derive it from the policy. Two responses for the
+  same machine seconds apart can disagree, and nothing on the wire says which you are holding.
+- **`.dead` never comes back from a ping** — but it is ordinary elsewhere. `pingHeartbeat` writes
+  `last_heartbeat_at = NOW()` and then derives the status from that same timestamp, so it answers
+  `.alive` or `.resurrected`; `createMachine` and `resetHeartbeat` answer `.notStarted`; and
+  `validate` never emits `heartbeatDead`. A `.dead` branch in a tick callback is unreachable code.
+  `getMachine`, `listMachines`, `checkOutMachine`, `generateOfflineProof` — and `updateMachine`,
+  a write that never touches the heartbeat column — can all report it. The rule that survives new
+  routes is *what the response was built from*: a status derived from a timestamp the same request
+  just wrote can never be `.dead`.
 - **`.dead` would not mean the machine is gone either.** It means only that the last ping is older
   than the window. Culling is gated on the policy's `requireHeartbeat`, which is off by default, so
   on a default policy the row and its seat stay put however long a machine reads `.dead`, and the
@@ -301,10 +331,42 @@ deliberate boundaries, not oversights.
   is always `nil` and a license with more than 100 effective entitlements cannot be enumerated in
   full. `hasEntitlement` reads that single page, so a `false` is authoritative only below the
   ceiling. Component listing is unaffected — keyset pagination works there.
-- **No auto-update API and no RFC 9421 response-signature verification here.** The server's
-  `GET /releases/actions/upgrade` does work (it is public, and answers `204` when you are already
-  current); this SDK simply does not wrap it yet. Artifact download is a different story — the route
-  exists but no role grants the permission it requires, so it `403`s for every client.
+- **The auto-update check's "no update" answer does not mean "you are up to date".**
+  `checkForUpgrade` returns `.noneAvailable` for two server-side situations the server refuses to
+  distinguish: there is no newer release, *or* there is one and this licence is not entitled to it.
+  Both answer `204`, deliberately, so a denial cannot leak "a newer version exists but you cannot
+  have it". Render it as "no update available" and hang renewal prompts off the licence's own
+  expiry instead. A *suspended* licence is told, though — that one is a `403`.
+- **`getPolicy` is unreachable with a licence key; `getLicensePolicy` is the same resource through
+  a permission a licence token actually holds.** `GET /policies/{id}` asks for `policy.read`,
+  which is not in the licence-token permission set, so it `403`s. `GET /licenses/{id}/policy` asks
+  for `license.read`, which is. Both are exposed and each one's docs point at the other.
+- **`getLicense`, `getLicensePolicy`, `updateMachine` and `deleteMachine` are not scoped to your
+  own licence.** No machine or licence read/write route applies a licence-scope check, and a
+  licence token's default permissions include `license.read`, `machine.read`, `machine.update` and
+  `machine.delete`. So a licence key can read any licence in the account — **including its
+  cleartext `key`** — and update or delete any machine in it. That is server-side and this SDK
+  cannot fix it; it is documented here rather than papered over. Reported upstream.
+- **`listMachines` has no fingerprint filter.** Its only near-equivalent is `query`
+  (`filter[q]`), a `%term%` substring match spanning `name`, `hostname` and `fingerprint` — so
+  compare `Machine.fingerprint` yourself on the results. `reactivateMachine` does exactly that.
+- **`reactivateMachine` resolves a `409 FINGERPRINT_TAKEN` only within your own licence.** All
+  three machine-uniqueness strategies include the caller's own rows, so a genuine re-activation is
+  always found. A conflict raised by the wider scopes — the same fingerprint on a *different*
+  licence — is rethrown unchanged rather than resolved, because that is the seat-sharing those
+  scopes exist to refuse, and a machine resource carries no `license_id` for you to notice it with.
+- **`health()` is the one call that goes out anonymously, deliberately.** The server resolves a
+  request's credential *before* checking whether the route is public, so an unusable credential
+  rejects `/v1/health` too — and in the server's default singleplayer mode a licence key under a
+  default policy is unusable (`401 LICENSE_NOT_ALLOWED`). A probe that fails whenever your
+  credential is the thing under suspicion answers nothing, so this one sends none. Every other
+  route carries the credential you configured.
+- **Nothing on the server ever deletes a process row.** The reaper meant to cull processes past
+  their 30-second window does not run, so a registration this SDK creates and never deletes is
+  permanent — and processes count against `policy.max_processes`. Call `deleteProcess`, or
+  `ProcessHeartbeatScheduler.stopAndDelete()`, on the way out.
+- **No RFC 9421 response-signature verification here.** Artifact download is also absent — the
+  route exists but no role grants the permission it requires, so it `403`s for every client.
 
 **Transport hardening**
 
@@ -323,6 +385,10 @@ deliberate boundaries, not oversights.
 
 **Packaging**
 
+- **A machine's `group` and `owner` sub-resources are not wrapped.**
+  `GET`/`PATCH /machines/{id}/{group,owner}` return `groups` and `users` resources — two domains
+  this SDK models nowhere else, and reassigning a machine's owner or group is an admin-console
+  concern rather than an embedded-client one. Deliberate, and matching `tamga-python`'s call.
 - **`TamgaObjC` exports no public interface yet.** The target builds and can be linked on Apple
   platforms, but the Objective-C wrapper over the Swift API is not written. It is excluded from
   Linux builds, where Objective-C interop does not exist.

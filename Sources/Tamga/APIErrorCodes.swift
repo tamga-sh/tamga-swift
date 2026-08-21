@@ -92,7 +92,9 @@ public enum TamgaAPIErrorCode {
     ///
     /// The uniqueness pre-check runs *before* the limit checks, so a
     /// re-activation of an already-registered fingerprint returns this rather
-    /// than any of the limit codes above.
+    /// than any of the limit codes above. That ordering is deliberate: the
+    /// server means it as "already activated, carry on", not as a failure.
+    /// `TamgaClient.reactivateMachine(_:scope:)` is the way to carry on.
     public static let fingerprintTaken = "FINGERPRINT_TAKEN"
 
     // MARK: Generic codes
@@ -211,5 +213,22 @@ extension TamgaError {
     public var isNotFound: Bool {
         guard case .api(let error) = self else { return false }
         return error.httpStatus == 404 || error.code == TamgaAPIErrorCode.notFound
+    }
+
+    /// Whether the server refused a machine create because the fingerprint is
+    /// already registered within the policy's uniqueness scope.
+    ///
+    /// **This is a re-activation, not a limit and not a failure.** The server
+    /// checks uniqueness *before* the quota limits precisely so that re-sending
+    /// a known fingerprint says "already activated, carry on" rather than "buy
+    /// another seat". `TamgaClient.reactivateMachine(_:scope:)` is the
+    /// intended way out of it.
+    ///
+    /// Matched on the code alone. The status is `409`, but a `409` can also be
+    /// `KEY_TAKEN` or `PID_TAKEN`, so status is not a substitute here the way
+    /// it is for `isNotFound`.
+    public var isFingerprintTaken: Bool {
+        guard case .api(let error) = self else { return false }
+        return error.code == TamgaAPIErrorCode.fingerprintTaken
     }
 }
