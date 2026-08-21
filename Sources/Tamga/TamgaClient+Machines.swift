@@ -21,6 +21,9 @@ extension TamgaClient {
     ///
     /// A fingerprint already registered within the policy's uniqueness scope is
     /// refused with `409 FINGERPRINT_TAKEN` before any limit is considered.
+    /// That is a re-activation rather than a failure -- see
+    /// `reactivateMachine(_:scope:)`, which resolves it into the machine it
+    /// names.
     public func createMachine(_ options: CreateMachineOptions) async throws -> Machine {
         let data = try await transport.postJSON(["machines"], body: options.requestBody)
         return Machine.fromResource(
@@ -28,6 +31,12 @@ extension TamgaClient {
     }
 
     /// Deletes a machine, freeing its seat.
+    ///
+    /// **Not scoped to the caller's own licence.** A licence-key credential
+    /// holds `machine.delete` and is in the permitted role set, and no machine
+    /// route applies a licence-scope check, so this can delete any machine in
+    /// the account. Reported upstream; do not describe this surface as
+    /// licence-scoped.
     public func deleteMachine(_ machineId: String) async throws {
         try await transport.delete(["machines", machineId])
     }
@@ -62,7 +71,9 @@ extension TamgaClient {
     ///   throwing leaves it no way to return the machine, and Swift has one.
     ///
     ///   Any other `TamgaError` from the create is rethrown unchanged --
-    ///   notably `409 FINGERPRINT_TAKEN`, which is a re-activation, not a limit.
+    ///   notably `409 FINGERPRINT_TAKEN`, which is a re-activation, not a
+    ///   limit. Use `reactivateMachine(_:scope:)` if you would rather that case
+    ///   resolved to the existing machine than surfaced as an error.
     public func activateMachine(
         _ options: CreateMachineOptions,
         scope: Scope? = nil
@@ -224,5 +235,26 @@ extension TamgaClient {
             ["processes", processId, "actions", "ping"], body: nil)
         return MachineProcess.fromResource(
             try Self.decode(DataEnvelope<ProcessAttributes>.self, from: data).data)
+    }
+
+    /// Deletes a process registration.
+    ///
+    /// **Call this when the process exits. Nothing else will.** The server's
+    /// process reaper -- the job meant to delete rows whose 30-second heartbeat
+    /// window has lapsed -- does not run, so a row this SDK creates and never
+    /// deletes stays for good. That matters beyond tidiness: processes count
+    /// against `policy.maxProcesses`, so an application that registers a
+    /// process per launch and never deletes one walks its own licence into
+    /// `TOO_MANY_PROCESSES` after enough restarts, with nothing in the machine
+    /// or licence state to explain why.
+    ///
+    /// `ProcessHeartbeatScheduler.stopAndDelete()` pairs the two calls for the
+    /// common case of a scheduler that owns the registration.
+    ///
+    /// Deleting a process that is already gone is a `404`
+    /// (`TamgaError.isNotFound`), which is usually not worth reporting on a
+    /// shutdown path.
+    public func deleteProcess(_ processId: String) async throws {
+        try await transport.delete(["processes", processId])
     }
 }
