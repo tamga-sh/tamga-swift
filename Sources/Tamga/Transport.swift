@@ -113,101 +113,6 @@ struct Transport: Sendable {
         self.jitterMilliseconds = jitterMilliseconds
     }
 
-    // MARK: - Pure helpers
-
-    /// Filters a `Tamga-Version` value to the server's accepted character set
-    /// and length.
-    ///
-    /// Mirrors the server's own filter-then-truncate order exactly: disallowed
-    /// characters are dropped rather than replaced, and only then is the result
-    /// truncated. Truncating first would produce a different string.
-    static func sanitizeVersion(_ version: String?) -> String {
-        guard let version else { return "" }
-        var out = ""
-        for character in version {
-            guard out.count < maxAPIVersionLength else { break }
-            let allowed = character.isASCII
-                && (character.isLetter || character.isNumber || character == "." || character == "-")
-            if allowed {
-                out.append(character)
-            }
-        }
-        return out
-    }
-
-    /// Characters that may appear literally in a path segment: RFC 3986's
-    /// unreserved set. Everything else, `/` very much included, is escaped.
-    private static let unreservedPathCharacters: CharacterSet = {
-        var allowed = CharacterSet.alphanumerics
-        allowed.insert(charactersIn: "-._~")
-        return allowed
-    }()
-
-    /// Percent-encodes one path segment so it cannot escape its position.
-    ///
-    /// Encoding alone is not enough: `.` and `..` are unreserved characters, so
-    /// a segment consisting only of dots survives escaping and is still a
-    /// dot-segment that URL resolution collapses -- which is exactly how an id
-    /// of `../../evil` reached a different endpoint. Such a segment has its
-    /// dots percent-encoded so it stays an ordinary, literal path component.
-    static func encodePathSegment(_ segment: String) throws -> String {
-        guard !segment.isEmpty else {
-            // A caller-supplied empty id would otherwise collapse to `//` and
-            // come back as an opaque 404 rather than an actionable error.
-            throw TamgaError.transport(message: "A path segment cannot be empty.", underlying: nil)
-        }
-        guard let escaped = segment.addingPercentEncoding(
-            withAllowedCharacters: unreservedPathCharacters) else {
-            // Fails closed. This is the one function standing between a
-            // caller-supplied id and the request path, so it must not degrade
-            // to something that merely looks harmless.
-            throw TamgaError.transport(message: "A path segment could not be encoded.",
-                                       underlying: nil)
-        }
-        if escaped.allSatisfy({ $0 == "." }) {
-            return String(repeating: "%2E", count: escaped.count)
-        }
-        return escaped
-    }
-
-    /// Whether a request is safe to repeat after a 429.
-    static func isRetryable(method: String, path: String) -> Bool {
-        if method == "GET" { return true }
-        guard method == "POST" else { return false }
-        return retryablePostSuffixes.contains { path.hasSuffix($0) }
-    }
-
-    /// Reads `Retry-After` as delta-seconds, returning `nil` when absent or
-    /// unusable.
-    ///
-    /// The HTTP-date form is ignored deliberately. The server sends seconds,
-    /// and misreading a date as a duration would be far worse than falling back
-    /// to local backoff.
-    static func parseRetryAfterSeconds(_ headerValue: String?) -> Int? {
-        guard let trimmed = headerValue?.trimmingCharacters(in: .whitespaces), !trimmed.isEmpty,
-              let seconds = Int(trimmed), seconds >= 0
-        else {
-            return nil
-        }
-        return seconds
-    }
-
-    /// How long to wait before the retry numbered `attempt`, zero-based.
-    ///
-    /// Prefers the server's `Retry-After` -- it knows when the bucket refills --
-    /// but caps it, so a misconfigured or hostile proxy cannot park the caller
-    /// for an hour on one header. Otherwise exponential backoff with jitter,
-    /// because a fleet that all retries on the same schedule reconverges into
-    /// the spike it was backing off from.
-    static func retryDelayMilliseconds(attempt: Int, retryAfterSeconds: Int?,
-                                       jitterMilliseconds: UInt64) -> UInt64 {
-        if let retryAfterSeconds {
-            return UInt64(min(retryAfterSeconds, maxRetryAfterSeconds)) * 1000
-        }
-        let shift = min(attempt, maxBackoffShift)
-        return (UInt64(1) << UInt64(shift)) * 1000 + jitterMilliseconds
-    }
-
     // MARK: - Requests
 
     func getJSON(_ segments: [String], query: [URLQueryItem] = []) async throws -> Data {
@@ -215,8 +120,42 @@ struct Transport: Sendable {
                        accept: "application/vnd.api+json")
     }
 
+    /// Performs a `GET` whose route answers `204 No Content` as a meaningful
+    /// verdict rather than as an error, returning `nil` for that case.
+    ///
+    /// Only the auto-update check needs this. Everywhere else a 2xx carries a
+    /// body and an empty one is a fault; there, decoding failure is the right
+    /// outcome and this method would hide it.
+    func getJSONOrNoContent(_ segments: [String],
+                            query: [URLQueryItem] = []) async throws -> Data? {
+        let (data, status) = try await sendWithStatus(
+            method: "GET", segments: segments, query: query, body: nil,
+            accept: "application/vnd.api+json")
+        return status == 204 ? nil : data
+    }
+
+    /// Requests a path that is **not** under `/v1/accounts/{accountId}`.
+    ///
+    /// Only `GET /v1/health` needs this. Every other route this SDK calls is
+    /// account-scoped, and the account prefix was unconditional until this
+    /// existed -- which is the whole reason no SDK in the fleet could reach the
+    /// health probe, the server having exempted it from both auth and the
+    /// host-header check.
+    ///
+    /// `segments` is the complete path after the host, so the caller decides
+    /// whether an account appears in it at all.
+    func getRootJSON(_ segments: [String], query: [URLQueryItem] = []) async throws -> Data {
+        try await send(method: "GET", segments: segments, query: query, body: nil,
+                       accept: "application/json", accountScoped: false)
+    }
+
     func postJSON(_ segments: [String], body: JSONValue?) async throws -> Data {
         try await send(method: "POST", segments: segments, query: [], body: body,
+                       accept: "application/vnd.api+json")
+    }
+
+    func patchJSON(_ segments: [String], body: JSONValue?) async throws -> Data {
+        try await send(method: "PATCH", segments: segments, query: [], body: body,
                        accept: "application/vnd.api+json")
     }
 
@@ -232,7 +171,16 @@ struct Transport: Sendable {
     }
 
     private func send(method: String, segments: [String], query: [URLQueryItem],
-                      body: JSONValue?, accept: String) async throws -> Data {
+                      body: JSONValue?, accept: String,
+                      accountScoped: Bool = true) async throws -> Data {
+        try await sendWithStatus(method: method, segments: segments, query: query, body: body,
+                                 accept: accept, accountScoped: accountScoped).0
+    }
+
+    private func sendWithStatus(method: String, segments: [String], query: [URLQueryItem],
+                                body: JSONValue?, accept: String,
+                                accountScoped: Bool = true) async throws -> (Data, Int) {
+        let allSegments = accountScoped ? ["v1", "accounts", accountId] + segments : segments
         let encodedBody: Data? = try body.map { value in
             do {
                 return try TamgaJSONCoding.encoder.encode(value)
@@ -241,9 +189,9 @@ struct Transport: Sendable {
                                            underlying: error)
             }
         }
-        let path = "/" + segments.joined(separator: "/")
+        let path = "/" + allSegments.joined(separator: "/")
         let retryable = Self.isRetryable(method: method, path: path)
-        let request = try buildRequest(method: method, segments: segments, query: query,
+        let request = try buildRequest(method: method, segments: allSegments, query: query,
                                        body: encodedBody, accept: accept)
 
         var attempt = 0
@@ -252,7 +200,7 @@ struct Transport: Sendable {
 
             if response.statusCode != 429 || !retryable || attempt >= maxRetries {
                 try throwIfError(data: data, response: response)
-                return data
+                return (data, response.statusCode)
             }
 
             let delay = Self.retryDelayMilliseconds(
@@ -305,8 +253,7 @@ struct Transport: Sendable {
         // safe here: it leaves both `/` and dot-segments intact, so an id of
         // `../../evil` produced `.../licenses/../../evil/actions/check-in` and
         // called an entirely different endpoint.
-        let allSegments = ["v1", "accounts", accountId] + segments
-        let encoded = try allSegments.map(Self.encodePathSegment)
+        let encoded = try segments.map(Self.encodePathSegment)
         let basePath = components.percentEncodedPath.hasSuffix("/")
             ? String(components.percentEncodedPath.dropLast())
             : components.percentEncodedPath
