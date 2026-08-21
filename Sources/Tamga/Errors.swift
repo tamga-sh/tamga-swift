@@ -37,11 +37,22 @@ public enum TamgaError: Error, Sendable {
     /// error reporting nothing structured to work with.
     case malformedResponse(message: String, underlying: (any Error)?)
 
-    /// `TamgaClient.activateMachine` found the license over a policy limit.
+    /// An activation found the license over a policy limit.
     ///
-    /// **The machine has already been deleted** by the time this is thrown --
-    /// activation rolls back so a rejected activation does not leave an
-    /// orphaned row consuming a seat. The meta identifies which limit was hit.
+    /// **Whether the machine still exists depends on which call threw, and the
+    /// rule is "roll back only what this call created".**
+    ///
+    /// - `TamgaClient.activateMachine` created the machine, so it deletes it
+    ///   before throwing -- a rejected activation must not leave an orphaned
+    ///   row consuming a seat. The exception is a create-time `422` limit
+    ///   rejection, where the server refused before writing a row and there is
+    ///   nothing to roll back.
+    /// - `TamgaClient.reactivateMachine` may instead have adopted a machine
+    ///   that already existed. **That one is never deleted**: it predates the
+    ///   call, and surrendering a seat the caller never offered up is not a
+    ///   rollback.
+    ///
+    /// The meta identifies which limit was hit either way.
     case machineOverLimit(ValidationMeta)
 
     /// `TamgaClient.activateMachine` created the machine, then the validation

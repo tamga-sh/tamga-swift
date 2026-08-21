@@ -15,9 +15,14 @@ point at <https://tamga.sh> instead.
 
 **Current state: complete.** `Sources/Tamga/Crypto/` (Ed25519, AES-256-GCM, HKDF-SHA256,
 ECDSA-P256, RSA PKCS1/PSS, DER), `Checkout/`, `Proof.swift`, and the HTTP surface
-(`TamgaClient`'s 20 endpoints, `Transport`, `AuthTransport`, the JSON:API error model,
+(`TamgaClient`'s 31 methods, `Transport`, `AuthTransport`, the JSON:API error model,
 `EntitlementCache`, both heartbeat schedulers, and the full `Policy` struct) are all implemented
-and tested — 226 tests, ~88% line coverage against an 80% gate.
+and tested — 291 tests, ~94% line coverage against an 80% gate.
+
+Deliberately **not** wrapped: a machine's `group`/`owner` sub-resources
+(`GET|PATCH /machines/{id}/{group,owner}`), which return `groups` and `users` resource types this
+SDK models nowhere else and which are an admin-console concern; and artifact download, which
+`403`s for every client because no role grants `artifact.download`.
 
 The normative description of the network surface is `../docs/api-client-contract.md`, derived from
 `tamga-go`. Behavioural changes to `TamgaClient`/`Transport` should update that document too, or
@@ -62,17 +67,41 @@ production with attacker-supplied bytes. Do not relax the pin back to 3.x.
 where a P1363 signature would be exactly 64 raw bytes. This previously used `rawRepresentation` and
 rejected every genuine server-issued ECDSA machine file.
 
-**`Crypto/Ecdsa.swift` has an explicit curve-OID check most callers would not expect to need.**
+**`Crypto/Ecdsa.swift` accepts a bare 65-byte uncompressed point as well as SPKI, and it has to.**
+The server publishes `ecdsa_public_key` as `BASE64.encode(ecdsa_pair.public_key().as_ref())`
+(`crypto/key_material.rs`, pinned by its own `ecdsa_public_key_is_65_bytes` test) and
+`accounts/serializer.rs` hands that same string to API callers. This type used to require X.509
+`SubjectPublicKeyInfo` and so returned `false` for every genuine ECDSA machine file — a caller who
+base64-decoded the key the API gave them could not verify anything. Confirmed empirically against
+server-issued fixtures. The whole SDK fleet assumes PKIX/SPKI here, so the same gap is very likely
+live in the other seven repos. RSA needs no equivalent branch: the server publishes PKCS#1
+`RSAPublicKey` DER and `_RSA.Signing.PublicKey(derRepresentation:)` accepts both encodings.
+
+**`Crypto/Ecdsa.swift` has an explicit curve-OID check, and it is worth less than it used to claim.**
 Confirmed directly (empirically, not assumed): CryptoKit's
 `P256.Signing.PublicKey(derRepresentation:)` does NOT validate the curve OID in the
-`AlgorithmIdentifier` it parses, only the resulting coordinate byte length. A hand-crafted SPKI
-declaring the secp256k1 curve OID but carrying a real P-256 point's raw coordinates (same 65-byte
-length) is silently accepted by CryptoKit's own parser. `Ecdsa.swift`'s guard (backed by
-`DER.swift`'s minimal OID extractor) is what actually closes this — it is the exact curve-confusion
-bug class a cross-repo security audit of this SDK family found live in
-`tamga-python`/`tamga-go`/`tamga-dotnet`'s generic `ECDsa`-based verifiers, which had no equivalent
-check. Do not remove this guard to "simplify" the type; see `EcdsaTests.swift`'s regression test for
-what it protects against.
+`AlgorithmIdentifier` it parses. A hand-crafted SPKI declaring the secp256k1 curve OID but carrying
+a real P-256 point's raw coordinates is silently accepted by CryptoKit's own parser, and
+`Ecdsa.swift`'s guard (backed by `DER.swift`'s minimal OID extractor) is what rejects it.
+
+**But this guard is not what stops a foreign-curve signature verifying, and the note here used to
+say it was.** Measured against the pinned swift-crypto 4.5.1, a key on a genuinely different curve
+is refused by BOTH branches on POINT VALIDITY before any OID is read — a real secp256k1 SPKI and a
+real secp256k1 bare point are each rejected because the coordinates do not satisfy P-256's curve
+equation (BoringSSL's `EC_KEY_check_key`, reached from both initializers). And `verify` is
+hardcoded to build a `P256.Signing.PublicKey`, so the curve the math runs on is fixed at compile
+time and the key cannot choose it. What the OID check genuinely rejects is a *mislabelled* key: a
+real P-256 point wearing another curve's OID, which is a valid P-256 key that would verify
+correctly. Refusing it is hygiene — a key whose own metadata contradicts itself is not trustworthy —
+not forgery prevention.
+
+Keep it anyway. It is cheap, and it is the standing guard on this type never growing a dynamic
+multi-curve dispatch — which is precisely the shape in which this bug class IS a live forgery risk
+in `tamga-python`/`tamga-go`/`tamga-dotnet`'s generic `ECDsa`-based verifiers, where the key really
+does select the curve. Do not "unify" the two branches by dropping it, and do not restate the
+overbroad version of this claim. `EcdsaTests.swift` covers both branches with real
+P-384/secp256k1 keys; note that a P-384 point is 97 bytes and so never reaches the 65-byte
+bare-point branch at all — secp256k1 is the curve that tests it.
 
 **Everything else is hand-rolled, idiomatic Swift.** HTTP transport goes on `URLSession` behind
 the `HTTPRequestPerforming` protocol — no crypto library is used for networking, JSON:API decoding,
@@ -112,7 +141,10 @@ tamga-swift/
 ├── Sources/
 │   ├── Tamga/                    — public Swift API
 │   │   ├── TamgaClient.swift     — top-level client, split across TamgaClient+*.swift extensions
+│   │   │                            (+Machines, +Entitlements, +Reads, +Reactivation,
+│   │   │                             +Releases, +Health)
 │   │   ├── Transport.swift       — HTTPRequestPerforming seam, URL/auth/headers, 429 retry
+│   │   ├── Transport+Helpers.swift — the pure half: version sanitizing, path encoding, backoff
 │   │   ├── AuthTransport.swift   — the seven auth forms
 │   │   ├── EntitlementCache.swift, HeartbeatScheduler.swift — actors
 │   │   ├── Errors.swift          — TamgaError (API) and TamgaCheckoutError (offline)
@@ -121,7 +153,8 @@ tamga-swift/
 │   │   ├── CanonicalJson.swift   — recursive alphabetical-key-sorted JSON writer, for Proof
 │   │   ├── Crypto/                — Ed25519, AesGcm, Hkdf, Ecdsa, Rsa, DER — see "Crypto Architecture" above
 │   │   ├── Models/                — License, Machine, Component, MachineProcess, Entitlement,
-│   │   │                             Policy, Scope, ValidationCode/Meta, Page, requests/results
+│   │   │                             Policy, Release, HealthStatus, Scope, ValidationCode/Meta,
+│   │   │                             Page (keyset) + OffsetPage (machines only), requests/results
 │   │   └── Checkout/               — LicenseFile, MachineFile, PemEnvelope (PEM parse/verify/decrypt)
 │   └── TamgaObjC/                — thin Objective-C interop wrapper over Tamga
 ├── Tests/TamgaTests/             — Swift Testing (import Testing, NOT XCTest)
@@ -160,16 +193,55 @@ no-op or advertise a guarantee the server doesn't enforce. Only the gaps relevan
 scope (license validation, checkout, machine management, offline proof) are listed — the
 specification covers the full set, including analytics/EE items that don't touch this SDK at all.
 
-- **The auto-update endpoint works; the old "it 500s" directive was wrong.** `GET
-  /releases/actions/upgrade` routes to a live handler and is **public** (optional auth). The real
-  constraints are different ones: an up-to-date caller gets `204` with an empty body (do not
-  confuse that with a decode failure); omitting `constraint` defaults to patch-only (`~x.y.z`);
-  omitting `channel` matches **every** channel including `alpha`/`dev`; and `product` is the
-  product **UUID**, not its code. The artifact-download route exists too
-  (`GET /artifacts/{id}/actions/download`), but is behind an `artifact.download` action that no
-  role currently grants, so it 403s for every real client — that part is genuinely blocked
-  upstream. This SDK does not wrap either endpoint yet; that is a scope decision, not a
-  server limitation.
+- **The auto-update endpoint works, and its `204` means two things.** `GET
+  /releases/actions/upgrade` routes to a live handler and is **public** (optional auth); it is
+  wrapped as `checkForUpgrade`. Four query parameters are REQUIRED — `product` (the product
+  **UUID**, not its code), `platform`, `filetype`, `version` — and axum's plain `Query` extractor
+  rejects a missing one with a **plain-text 400**, not a JSON:API error document, so the code
+  degrades to the synthetic `UNKNOWN`. Optional: `constraint` (omitting it defaults to patch-only
+  `~x.y.z`, not "any newer") and `channel` (omitting it matches **every** channel including
+  `alpha`/`dev`). `204 No Content` is returned both when there is no newer release and when there
+  IS one the licence is not entitled to — deliberately, so a denial cannot leak "a newer version
+  exists but you cannot have it". Never report it as "up to date"; `UpgradeCheckResult` names the
+  case `.noneAvailable` for that reason. A **suspended** licence gets `403` instead, before the
+  204 branch. The artifact-download route (`GET /artifacts/{id}/actions/download`) is behind an
+  `artifact.download` action no role grants, so it 403s for every real client — genuinely blocked
+  upstream, and not wrapped.
+- **`/v1/health` must be called anonymously, and the reason is a middleware ordering bug-shaped
+  behaviour.** `require_authentication` (`auth/require_auth.rs:120-127`) resolves the request's
+  credential with `?` **before** it uses the `is_public_route` result it computed one line earlier,
+  so a resolution *error* rejects a public route. Whether resolution runs at all on a path with no
+  `{account_id}` depends on the mode: multiplayer short-circuits to `Ok(None)`
+  (`auth/context.rs:293-297`), but **singleplayer is `#[default]`** (`config.rs:11-12`) and takes
+  the account id from configuration, so the lookup runs for every path — and a licence key under a
+  default policy returns `Err(401 LICENSE_NOT_ALLOWED)` (`auth/license_lookup.rs:83-84`). Sending a
+  credential would therefore break the probe for exactly the callers it exists to help.
+  `Transport.RouteScope.publicRoot` encodes this; do not "fix" it into sending auth for
+  consistency with the fleet contract's §2.
+- **`GET /policies/{id}` is unreachable under licence-key auth; `GET /licenses/{id}/policy` is not.**
+  The first asks for `policy.read`, which is absent from `Role::LicenseToken`'s permission set
+  (`authz/mod.rs:236-261`); the second asks for `license.read`, which is present. Both are wrapped
+  (`getPolicy`, `getLicensePolicy`) and each one's doc points at the other. Do not collapse them.
+- **Nothing licence-scopes the licence and machine routes.** `require_license_scope` is called
+  only from the four validate/checkout handlers. `GET /licenses/{id}` returns `attributes.key` in
+  cleartext and gates only on `license.read`; the machine routes gate on `machine.read`/`.update`/
+  `.delete`, all of which `Role::LicenseToken` holds by default. So a licence key can read any
+  licence in the account (key included) and update or delete any machine in it. Filed upstream —
+  do not write docs implying that surface is scoped, and do not try to "fix" it client-side.
+- **The machine collection is OFFSET-paginated; its sub-collections are not.** `GET /machines`
+  emits `meta.page{number,size,total,totalPages}` and takes `page[number]`/`page[size]` (aliases
+  `page`/`limit`). `GET /machines/{id}/components` and `/processes` take bare `limit` plus
+  `page[after]` and emit no `meta` at all. Do not unify them. `GET /machines` has **no fingerprint
+  filter** — `filter[q]` is `%term%` ILIKE across `name`/`hostname`/`fingerprint`, truncated at
+  200 chars; multi-value filters are comma-joined inside one value, because a repeated key
+  silently collapses to its last occurrence.
+- **A machine resource carries no `license_id` and no `relationships`.** No serializer in the API
+  emits a relationships block. So nothing client-side can tell which licence a machine belongs to,
+  which is why `reactivateMachine`'s fingerprint lookup is account-wide and why
+  `Scope(fingerprint:)` is the only membership check available.
+- **The process reaper is dead code.** No server job deletes a process row, ever, and processes
+  count against `policy.max_processes`. `deleteProcess` / `ProcessHeartbeatScheduler.stopAndDelete`
+  are the only things that clean up.
 - **Auth IS enforced server-side, and license-key auth is off by default.** The old "no auth is
   enforced" note was false. `Authorization: License <key>` only authenticates when the license's
   policy sets `authentication_strategy` to `LICENSE` or `MIXED`; the column defaults to `'TOKEN'`,
@@ -252,24 +324,42 @@ specification covers the full set, including analytics/EE items that don't touch
   `Policy::effective_heartbeat_duration_secs` and the cull job's `COALESCE(p.heartbeat_duration,
   600)` agree on that, and `heartbeat_status`/`next_heartbeat_at` are both computed from it. The
   process heartbeat window really is a hardcoded 30s, with no resurrection grace period at all.
-  `HeartbeatScheduler.window`/`defaultInterval` are still sized against the 600s fallback and
-  nothing here reads the policy, so on a policy with a shorter window the default ping rate is too
-  slow and machines report `DEAD`. Making the scheduler adapt needs a `getPolicy`/`getMachine` this
-  SDK does not expose yet; until then a caller on such a policy has to pass its own interval. No
-  field here carries the window outright, and `Machine.nextHeartbeatAt` only half-substitutes:
-  `create`, `ping-heartbeat` and `reset-heartbeat` return the written row without the policy join,
-  so there it is `last_heartbeat_at + 600s` whatever the policy says. Only check-out and
-  offline-proof, which read through `find_by_id`, derive it from the policy.
+  `HeartbeatScheduler.window`/`defaultInterval` are still sized against the 600s fallback, but
+  `HeartbeatScheduler.sizedToPolicy(client:machineId:licenseId:)` now reads the window off
+  `getLicensePolicy` and sizes the interval from it — that is the right default on any policy that
+  sets a shorter window. No field carries the window outright, and `Machine.nextHeartbeatAt` only
+  half-substitutes: `create`, `ping-heartbeat`, `reset-heartbeat` and **`PATCH`** return the
+  written row without the policy join, so there it is `last_heartbeat_at + 600s` whatever the
+  policy says, while `GET /machines/{id}`, the machine list, check-out and offline-proof all derive
+  it from the policy. Two responses for the same machine can disagree; do not size an interval
+  from it. ⚠️ **Both schedulers floor the interval at one second** (`flooredInterval`), which is a
+  bound on the request rate rather than the non-positive guard it replaced — `Task.sleep` honours a
+  sub-second delay exactly, so `0.001` really does issue ~665 pings a second, and a guard that
+  clamps `0` while passing `0.001` bounds nothing. Do **not** narrow it back. The floor costs
+  nothing a policy can express, because liveness is judged on *truncated* whole seconds:
+  `heartbeat_status_within` compares `(now - last).num_seconds() <= window_secs` and
+  `num_seconds()` truncates, so a machine first reads `DEAD` at `window_secs + 1` and every window
+  carries a free second. Do not restate that pessimistically as "DEAD once age passes the window" —
+  that reading makes a 1s window look unserveable at a 1s ping when it has 2s of slack. What the
+  floor does cost is the divisor's two-losses promise (window 3 agrees, 2 keeps one spare, 1 keeps
+  none), and the window no interval can hold is **`0`**, not `1`. Because `0` is unholdable at any
+  rate, `interval(forWindowSeconds:)` substitutes the 600s fallback **window** for a non-positive
+  one *before* dividing — same `.dead` verdict, 200× fewer requests than flooring the divided `0`
+  to 1s would give. Keep `windowSeconds(for:)` faithful regardless; reporting the window and
+  scheduling against it are different jobs. Do not add a window-aware floor to chase `0`; the
+  table in `HeartbeatFloorTests` and its standing caveat are the record.
 - **`DEAD` is not reachable from a ping.** Every write route returns a status that cannot be it:
   `ping-heartbeat` sets `last_heartbeat_at = NOW()` and `heartbeat_status_within` then measures
   `Utc::now() - last_heartbeat_at` against the window (`machines/model.rs:124-146`), so it is always
   `ALIVE` or `RESURRECTED`; `reset-heartbeat` nulls the column and `POST /machines` never sets it,
   so both are `NOT_STARTED`; and `validate` never constructs `ValidationCode::HeartbeatDead` — the
-  variant exists in `licenses/model.rs:201` with zero construction sites. `DEAD` is served from a
-  machine *read*, which reaches this SDK only through `check-out` and `generate-offline-proof`
-  (both resolve the row via `queries::find_by_id` rather than writing it); `GET /machines/{id}` and
-  the list route are M11/M36 and are not wrapped here. Do not write a `DEAD` branch against a ping
-  response — it is unreachable — and do not delete the enum case or the field over it.
+  variant exists in `licenses/model.rs:201` with zero construction sites. `DEAD` is served from
+  anything that reads the stored row: `check-out`, `generate-offline-proof`, and now
+  `GET /machines/{id}` and `GET /machines`, all wrapped here. **`PATCH /machines/{id}` is the
+  counterexample to the route-shaped version of this rule** — it is a write, but it never touches
+  `last_heartbeat_at`, so it judges an untouched timestamp and can answer `DEAD`. State the rule as
+  *what the response was built from*, never as a list of write routes. Do not write a `DEAD` branch
+  against a ping response — it is unreachable — and do not delete the enum case or the field.
 - **`DEAD` would not mean the row was culled either, and on a default policy nothing is ever
   culled.** `require_heartbeat` defaults to `FALSE`, the cull job early-returns for any policy that
   does not set it, and `Machine::heartbeat_status*` never consults the flag at all — it derives
@@ -287,6 +377,32 @@ specification covers the full set, including analytics/EE items that don't touch
   two paths bleed into each other, and don't reintroduce the pre-v2 license-file transform (raw
   key bytes zero-padded to 32). That transform and the `NaiveKey` type implementing it were
   deleted, not deprecated, so no caller can silently opt back into the weaker derivation.
+- **Offline MACHINE files are format v2 too, and the SDK used to read all three parts of that
+  format wrong.** `alg` is `"<encoding>+<signing suffix>+v2"`, parsed by `MachineFileAlgorithm`:
+  encoding at the FIRST `+`, the `v2` marker at the LAST, signing suffix in between, cross-checked
+  against the caller-supplied scheme. Both `aes-256-gcm` and `rsa-pss-sha256` contain hyphens and
+  `rsa-pss-sha256` contains `rsa-sha256`, so a substring test or an index-1 split gets `ed25519`
+  right and the rest wrong — which is why the bug survived. `alg` is NOT covered by the signature,
+  so a downgrade to v1 costs an attacker one edit. An encrypted machine file's `enc` is
+  `"<nonce_b64>.<cipher_b64>"` — two SEPARATELY base64'd halves, from
+  `FieldEncryption::encrypt` — not one blob with a 12-byte nonce on the front. (The server's own
+  doc comment at `machine_file.rs` still says `base64(nonce‖ciphertext‖tag)` and contradicts the
+  code twenty lines below it; that stale comment is why all eight SDKs implemented the same wrong
+  thing. Trust the code.) LICENSE files really are the single-blob form — `encode_license_file`
+  does not go through `FieldEncryption` — so `EncryptedPayloadDecryptor` keeps both readers and
+  they are not interchangeable. **Whether that misreading was an ACTIVE failure depended on the
+  language's base64 decoder, and Swift is on the failing side.** Both halves are a multiple of 4
+  characters, so a lenient decoder drops the `.`, decodes the concatenation as one stream, and
+  reconstructs `nonce ‖ ciphertext ‖ tag` byte-for-byte — the old 12-byte slice then lands
+  correctly by accident, which is what happens in CPython and Node. `Data(base64Encoded:)` is
+  strict unless given `.ignoreUnknownCharacters`, and no call site here passes it, so every
+  encrypted machine file failed outright with "enc is not valid base64". Do not add that option to
+  "be forgiving": it would quietly restore the wrong reading.
+  `MachineFileServerFixtureAdversarialTests.dotSeparatedEncIsNotAcceptedAsPlainBase64` is the
+  standing guard on that. And the signed payload carries `meta` claims, so `exp` is enforced
+  with the SAME `LicenseFile.clockSkewToleranceSeconds`; a missing `exp` is legitimate and means
+  the checkout carried no `ttl`. Verify, then split, then decode, then decrypt — never decode
+  attacker-controlled bytes before the signature has passed.
 - **Offline license files are format v2 only.** `alg` must be `base64+ed25519+v2` or
   `aes-256-gcm+ed25519+v2`, the payload must carry signed `meta` claims (`iat`/`exp`/`jti`/`kid`),
   and `exp` is enforced with a 60-second clock-skew tolerance
