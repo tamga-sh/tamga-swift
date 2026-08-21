@@ -18,12 +18,14 @@ Runs on macOS 13+, iOS 16+ and Linux. 256 tests, with an 80% line-coverage gate 
 Swift Package Manager, by git URL — SPM resolves packages by URL, and Tamga publishes no
 central-registry package name:
 
+<!-- x-release-please-start-version -->
 ```swift
 // Package.swift
 dependencies: [
-    .package(url: "https://github.com/tamga-sh/tamga-swift", from: "1.2.0"),
+    .package(url: "https://github.com/tamga-sh/tamga-swift", from: "1.3.0"),
 ]
 ```
+<!-- x-release-please-end -->
 
 Then add the `Tamga` product to your target:
 

@@ -7,7 +7,11 @@
       "include-component-in-tag": false,
       "changelog-path": "CHANGELOG.md",
       "extra-files": [
-        "Sources/Tamga/TamgaClient.swift"
+        "Sources/Tamga/TamgaClient.swift",
+        {
+          "type": "generic",
+          "path": "README.md"
+        }
       ]
     }
   }
