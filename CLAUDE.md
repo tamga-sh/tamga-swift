@@ -15,14 +15,23 @@ point at <https://tamga.sh> instead.
 
 **Current state: complete.** `Sources/Tamga/Crypto/` (Ed25519, AES-256-GCM, HKDF-SHA256,
 ECDSA-P256, RSA PKCS1/PSS, DER), `Checkout/`, `Proof.swift`, and the HTTP surface
-(`TamgaClient`'s 31 methods, `Transport`, `AuthTransport`, the JSON:API error model,
+(`TamgaClient`'s 35 methods, `Transport`, `AuthTransport`, the JSON:API error model,
 `EntitlementCache`, both heartbeat schedulers, and the full `Policy` struct) are all implemented
-and tested — 291 tests, ~94% line coverage against an 80% gate.
+and tested — 381 tests, ~94.6% line coverage against an 80% gate. (The method count read "31"
+before this was recounted mechanically at `git grep -c '^    public func ' Sources/Tamga/TamgaClient*.swift`;
+it was 32 on the previous release and three artifact reads were added on top.)
 
 Deliberately **not** wrapped: a machine's `group`/`owner` sub-resources
 (`GET|PATCH /machines/{id}/{group,owner}`), which return `groups` and `users` resource types this
-SDK models nowhere else and which are an admin-console concern; and artifact download, which
-`403`s for every client because no role grants `artifact.download`.
+SDK models nowhere else and which are an admin-console concern; and artifact **writes**
+(`artifact.create`/`update`/`delete`), which are absent from `Role::LicenseToken` — publishing is
+an operator action, not a client one.
+
+Artifact **read and download** are wrapped as of `tamga-api@e6d317b`, which added `artifact.read`
+and `artifact.download` to `Role::LicenseToken` (`shared/authz/mod.rs:263-264`) and routed a real
+handler. The previous entry here — that download `403`s for every client because no role grants
+the action — was true when written and is now stale; see the artifact bullet under "Endpoint
+notes".
 
 The normative description of the network surface is `../docs/api-client-contract.md`, derived from
 `tamga-go`. Behavioural changes to `TamgaClient`/`Transport` should update that document too, or
@@ -204,9 +213,35 @@ specification covers the full set, including analytics/EE items that don't touch
   IS one the licence is not entitled to — deliberately, so a denial cannot leak "a newer version
   exists but you cannot have it". Never report it as "up to date"; `UpgradeCheckResult` names the
   case `.noneAvailable` for that reason. A **suspended** licence gets `403` instead, before the
-  204 branch. The artifact-download route (`GET /artifacts/{id}/actions/download`) is behind an
-  `artifact.download` action no role grants, so it 403s for every real client — genuinely blocked
-  upstream, and not wrapped.
+  204 branch.
+- **Artifacts are readable and downloadable with a licence key, and the download does NOT stream
+  bytes.** `artifact.read`/`artifact.download` were added to `Role::LicenseToken` in
+  `tamga-api@e6d317b`; before that every call was a `403` and this SDK deliberately wrapped
+  nothing. Three routes: `GET /releases/{release_id}/artifacts` (keyset, real `(created_at, id)`
+  seek, so `synthesizeCursor` is sound here unlike for entitlements), `GET /artifacts/{id}`, and
+  `GET /artifacts/{id}/actions/download`. Three things to keep straight:
+  1. **The download answers `303 See Other`** to a presigned storage URL by default. Following it
+     with the `Authorization` header attached hands the licence key to the storage host, so
+     `downloadArtifact` sends `?redirect=false` and gets the resource back with `redirectUrl`
+     populated instead. The `URLSession` layer refuses redirects anyway
+     (`SessionPolicyDelegate.urlSession(_:task:willPerformHTTPRedirection:…)` →
+     `completionHandler(nil)`), verified against a real socket for `303` specifically with the
+     redirect target asserted to have accepted zero connections. The returned URL must be fetched
+     with **no** credentials, and not through `Transport` — a real artifact routinely exceeds the
+     32 MiB response cap.
+  2. **`ArtifactAttributes` is `rename_all = "camelCase"` AND carries explicit
+     `#[serde(rename = "created")]`/`"updated"`** (`artifacts/serializer.rs:20,34-37`). So the wire
+     is `redirectUrl` but `created`/`updated` — **not** `createdAt`/`updatedAt`. The shared decoder's
+     `.convertFromSnakeCase` leaves every one of those alone, so `ArtifactAttributes` declares no
+     `CodingKeys`; adding them would compare a snake_case `stringValue` against the already-converted
+     key and decode `nil`, which is the bug `MachineAttributes` shipped. Measured side effect of
+     leaving them off: `redirect_url` decodes too, so a server-side rename either way is a non-event.
+  3. **A `403` on download is not necessarily an auth misconfiguration.** The handler runs
+     `releases::service::enforce_release_access` after the permission check, so the product's
+     distribution strategy, licence suspension, licence expiry under the policy's
+     `expirationStrategy`, and release entitlement each answer `403` to a caller that does hold
+     `artifact.download`. Listing does **not** apply that gate (`list_artifacts` calls
+     `require_read` only), so a listable artifact is not necessarily a downloadable one.
 - **`/v1/health` must be called anonymously, and the reason is a middleware ordering bug-shaped
   behaviour.** `require_authentication` (`auth/require_auth.rs:120-127`) resolves the request's
   credential with `?` **before** it uses the `is_public_route` result it computed one line earlier,

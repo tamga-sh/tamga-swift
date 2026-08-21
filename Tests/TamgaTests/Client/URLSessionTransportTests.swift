@@ -13,7 +13,8 @@ struct URLSessionTransportTests {
         // manually-set Cookie, and URLSession follows redirects by default.
         // Refusing outright is what keeps a 3xx from carrying credentials to a
         // host the caller never configured.
-        guard let server = LoopbackServer(behaviour: .redirect(to: "http://127.0.0.1:1/stolen"))
+        guard let server = LoopbackServer(
+            behaviour: .redirect(status: 302, reason: "Found", to: "http://127.0.0.1:1/stolen"))
         else {
             Issue.record("could not start the loopback server")
             return
@@ -31,6 +32,50 @@ struct URLSessionTransportTests {
             // which is only possible if it was not followed.
             #expect(error.httpStatus == 302)
         }
+    }
+
+    /// The artifact download route answers `303 See Other`, not `302`, and the
+    /// two are not interchangeable to `URLSession` -- a `303` rewrites the
+    /// follow-up to `GET`, which is precisely the shape that would sail
+    /// through unnoticed. The redirect target here is a second real server, so
+    /// "was not followed" is asserted as "was never contacted" rather than
+    /// inferred from the status that came back.
+    ///
+    /// `TamgaClient.downloadArtifact(_:ttl:)` asks for `?redirect=false` and so
+    /// never provokes this, but the refusal is what makes that a design choice
+    /// rather than the only thing standing between a licence key and a storage
+    /// host.
+    @Test("a 303 to another host is refused, and that host is never contacted")
+    func seeOtherIsRefusedAndTargetIsNeverContacted() async throws {
+        guard let storage = LoopbackServer(behaviour: .body(declaredLength: 2, actualBytes: 2))
+        else {
+            Issue.record("could not start the storage loopback server")
+            return
+        }
+        defer { storage.stop() }
+
+        guard let api = LoopbackServer(behaviour: .redirect(
+            status: 303, reason: "See Other",
+            to: "\(storage.baseURL)/bucket/art-1?X-Amz-Signature=deadbeef"))
+        else {
+            Issue.record("could not start the api loopback server")
+            return
+        }
+        defer { api.stop() }
+
+        let client = TamgaClient(accountId: "acct-123", auth: .licenseKey("lic-secret"),
+                                 host: api.baseURL, timeout: 10)
+
+        do {
+            _ = try await client.downloadArtifact("art-1")
+            Issue.record("expected the 303 to surface rather than be followed")
+        } catch let error as TamgaError {
+            #expect(error.httpStatus == 303)
+        }
+
+        #expect(api.acceptedConnections == 1)
+        // The credential never left the configured host.
+        #expect(storage.acceptedConnections == 0)
     }
 
     @Test("a response declaring more than the cap is refused before it transfers")

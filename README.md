@@ -69,6 +69,45 @@ func activate(licenseFile pem: String, licenseKey: String, publicKey: Data) {
 failure is a case of [`TamgaCheckoutError`](Sources/Tamga/Errors.swift); nothing here silently
 returns an unverified `License`.
 
+## Release artifacts
+
+An artifact is the payload of a release — the file an updater actually downloads. These became
+reachable from a licence key in `tamga-api@e6d317b`, which granted `artifact.read` and
+`artifact.download` to the licence-token role; before that every call was a `403` and this SDK
+wrapped nothing.
+
+```swift
+let page = try await client.listReleaseArtifacts(releaseId: release.id)
+guard let artifact = page.items.first(where: { $0.platform == "darwin" && $0.arch == "arm64" })
+else { return }
+
+let download = try await client.downloadArtifact(artifact.id, ttl: 900)
+
+// A plain session. NOT the SDK's client, and no Authorization header.
+let (fileURL, _) = try await URLSession.shared.download(from: download.url)
+```
+
+**The URL is fetched by you, without credentials, and that is the whole design.** The route's
+default answer is a `303 See Other` pointing at object storage; following it with this client's
+`Authorization` header still attached would hand your license key to the storage host. So
+`downloadArtifact` asks for `?redirect=false` and gets the presigned URL back in the body instead.
+The URL authenticates itself through its query string and needs no header of yours. Nothing is
+streamed through the SDK — a real installer routinely exceeds the client's 32 MiB response cap, and
+`Artifact.checksum` is yours to verify against the bytes you receive.
+
+`ttl` is the URL's lifetime in seconds, between `TamgaClient.minimumDownloadTTLSeconds` (60) and
+`TamgaClient.maximumDownloadTTLSeconds` (604800, one week). Omit it for the server's 300-second
+default. Out-of-range values are refused before the request is sent.
+
+**A `403` here is usually not a permissions problem.** The download enforces the owning release's
+read gate as well as the permission, so a product's `CLOSED` distribution strategy, a suspended
+license, an expired license under a policy whose `expirationStrategy` withholds newer builds, and a
+missing release entitlement each answer `403` to a caller that *does* hold `artifact.download`.
+Listing does not apply that gate, so a listable artifact is not necessarily a downloadable one.
+
+`Artifact.redirectURL` is `nil` on list and show — the server omits the key there. Use
+`downloadArtifact`, which returns the URL parsed and non-optional.
+
 ## Fingerprint canonicalisation
 
 The server stores `fingerprint TEXT NOT NULL` with no length limit, no `CHECK` and no
@@ -475,14 +514,18 @@ deliberate boundaries, not oversights.
   their 30-second window does not run, so a registration this SDK creates and never deletes is
   permanent — and processes count against `policy.max_processes`. Call `deleteProcess`, or
   `ProcessHeartbeatScheduler.stopAndDelete()`, on the way out.
-- **No RFC 9421 response-signature verification here.** Artifact download is also absent — the
-  route exists but no role grants the permission it requires, so it `403`s for every client.
+- **No RFC 9421 response-signature verification here.**
+- **Artifact writes are absent.** `artifact.create`/`update`/`delete` are not in a licence token's
+  permission set — publishing a build is an operator action. Reading and downloading artifacts
+  *are* wrapped; see [Release artifacts](#release-artifacts).
 
 **Transport hardening**
 
-- **Redirects are refused.** The API never legitimately redirects, and a 3xx can carry credentials
-  to a host you never configured — the session-cookie form especially, which no framework-level
-  stripping protects.
+- **Redirects are refused.** The API never legitimately redirects on a route this SDK calls, and a
+  3xx can carry credentials to a host you never configured — the session-cookie form especially,
+  which no framework-level stripping protects. The one route that *does* redirect by default is
+  the artifact download, and `downloadArtifact` asks it not to; see
+  [Release artifacts](#release-artifacts).
 - **Response bodies are capped at 32 MiB, enforced during the transfer.** A response that declares
   more than the cap is refused before any body arrives, and one that declares nothing is cut off the
   moment the running total crosses it. A timeout bounds how long a response may take, not how large
