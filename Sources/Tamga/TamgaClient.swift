@@ -187,7 +187,7 @@ public struct TamgaClient: Sendable {
     private static let userAgent = "tamga-swift/\(sdkVersion)"
 
     /// This SDK's version, reported in `User-Agent`.
-    static let sdkVersion = "1.2.1" // x-release-please-version
+    static let sdkVersion = "1.3.0" // x-release-please-version
 
     // MARK: - Licenses
 
