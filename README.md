@@ -22,7 +22,7 @@ central-registry package name:
 ```swift
 // Package.swift
 dependencies: [
-    .package(url: "https://github.com/tamga-sh/tamga-swift", from: "1.3.1"),
+    .package(url: "https://github.com/tamga-sh/tamga-swift", from: "1.3.2"),
 ]
 ```
 <!-- x-release-please-end -->
