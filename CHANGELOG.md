@@ -1,5 +1,35 @@
 # Changelog
 
+## [1.2.1](https://github.com/tamga-sh/tamga-swift/compare/v1.2.0...v1.2.1) (2026-08-21)
+
+
+### Bug Fixes
+
+* add the endpoint surface the SDK was missing (health, auto-update, reads, re-activation, process delete) ([6882201](https://github.com/tamga-sh/tamga-swift/commit/6882201efee0eec0548fbc279a13d6782e79fd0b))
+* align the SDK with the current tamga-api server contract ([8026a28](https://github.com/tamga-sh/tamga-swift/commit/8026a282037789d2e625abe4f926a68cff450ed7))
+* align the SDK with the current tamga-api server contract ([321f83f](https://github.com/tamga-sh/tamga-swift/commit/321f83fb49fba02c7b027c50d453872aa9e2bc33))
+* bound the ping interval by rate, not by sign ([66048ae](https://github.com/tamga-sh/tamga-swift/commit/66048aee826b7d8193b8e4bbbea0f84ddde24a2b))
+* bring the docs in line with the endpoints this SDK now has ([7e291c0](https://github.com/tamga-sh/tamga-swift/commit/7e291c0c15cd440025b97a62d94c737dbd56241f))
+* call /v1/health anonymously, or it 401s on a default server ([9bea401](https://github.com/tamga-sh/tamga-swift/commit/9bea401769f305abddd7c06bd5691fc6ac551fa1))
+* correct the DEAD heartbeat-status guidance, which was backwards ([c34001f](https://github.com/tamga-sh/tamga-swift/commit/c34001f9d8e69f56bf41cf1b64c9ebcc86be61c9))
+* correct the ECDSA curve-check rationale and cover the bare-point branch ([c904f72](https://github.com/tamga-sh/tamga-swift/commit/c904f72b9c09644e99dde05fb6feb9eba6399ab3))
+* correct the false "hardcoded 600s heartbeat window" claim ([be705b0](https://github.com/tamga-sh/tamga-swift/commit/be705b04861922b7f9647d688c2ff1a50a59a407))
+* correct two doc claims in this branch that do not survive checking ([74ac946](https://github.com/tamga-sh/tamga-swift/commit/74ac94629e3224a9ce133cb09ae31a18fb2dcc13))
+* expose the auto-update check, and name its "no" honestly ([9edb817](https://github.com/tamga-sh/tamga-swift/commit/9edb8170cb4f62bfa3299a4b3458def843d99dad))
+* expose the licence, policy and machine reads a client cannot work without ([8585968](https://github.com/tamga-sh/tamga-swift/commit/85859687f434ebfe77b8c58a15b0ddf389610644))
+* give a re-activation a way out of the 409 it dead-ends on ([7cf440f](https://github.com/tamga-sh/tamga-swift/commit/7cf440f4540c5ec86d2c09c780a0c2f324a45dd5))
+* keep README's ECDSA note in line with what each check actually does ([99beb4c](https://github.com/tamga-sh/tamga-swift/commit/99beb4c878f86867d512bf87b9e99f9939374b8e))
+* let a process registration be deleted, since nothing server-side ever does ([bc06cae](https://github.com/tamga-sh/tamga-swift/commit/bc06cae6c3fc5ee04b4162b4e39d7e8a698f3404))
+* let Transport reach a route that is not under an account ([c1bb958](https://github.com/tamga-sh/tamga-swift/commit/c1bb95843f370f4e876d089dbe4bee752ff02893))
+* make windowSeconds(for:) mirror the server exactly, as it claims to ([cec78b7](https://github.com/tamga-sh/tamga-swift/commit/cec78b77e5d3956c84ff0be24c3687dea3838c83))
+* nest RouteScope in Transport, which is what the docs already call it ([cac1363](https://github.com/tamga-sh/tamga-swift/commit/cac136381b29422d5849784a0010e70f43ad34c4))
+* reach /v1/health, which the account prefix made unreachable ([c39c8bc](https://github.com/tamga-sh/tamga-swift/commit/c39c8bce233247a6f8d5b105ac01c67b35304b36))
+* size the machine heartbeat interval from the policy, not the 600s fallback ([e88398e](https://github.com/tamga-sh/tamga-swift/commit/e88398eadaabf926a966f29b62e2016239ea06fa))
+* stop framing .dead as something a ping response can carry ([0cae60e](https://github.com/tamga-sh/tamga-swift/commit/0cae60e55e4ca797d07229a746dca4610288a400))
+* stop SECURITY.md describing a version of this SDK that no longer exists ([dc7684d](https://github.com/tamga-sh/tamga-swift/commit/dc7684d2feba17a594d7f58602d767b28a3c04e4))
+* verify machine files against the format the server actually emits ([71a24da](https://github.com/tamga-sh/tamga-swift/commit/71a24da7e198af61356a5718c5199b9847e7811e))
+* verify machine files against the format the server actually emits ([fbefb46](https://github.com/tamga-sh/tamga-swift/commit/fbefb464ac8ab1827aaec2a8e880c39215386242))
+
 ## [1.2.0](https://github.com/tamga-sh/tamga-swift/compare/v1.1.2...v1.2.0) (2026-08-20)
 
 
