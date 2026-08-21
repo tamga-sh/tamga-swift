@@ -1,5 +1,16 @@
 # Changelog
 
+## [1.3.2](https://github.com/tamga-sh/tamga-swift/compare/v1.3.1...v1.3.2) (2026-08-21)
+
+
+### Bug Fixes
+
+* artifact read/download, fingerprint canonicalisation, and two corrected claims ([1e0f95e](https://github.com/tamga-sh/tamga-swift/commit/1e0f95e4f3939a1d29c5804ac210688383bf041b))
+* canonicalise machine fingerprints instead of sending them byte-for-byte ([e387dd3](https://github.com/tamga-sh/tamga-swift/commit/e387dd3bc814e6b832ce0f01312083fdcbc9981c))
+* say what the key-id lenience actually decides, and pin it with a test ([49cc909](https://github.com/tamga-sh/tamga-swift/commit/49cc909126e9497ac0095e16c53cd9f1d59c34eb))
+* validate the download URL's scheme, and stop asserting a redirect rule that is not true ([d95ae06](https://github.com/tamga-sh/tamga-swift/commit/d95ae06dd6afc862af1e4dbeb307b3491ba75ded))
+* wrap artifact read and download, now that a licence key can reach them ([f210da3](https://github.com/tamga-sh/tamga-swift/commit/f210da355187628079d90bc66bc777d7bd578fa3))
+
 ## [1.3.1](https://github.com/tamga-sh/tamga-swift/compare/v1.3.0...v1.3.1) (2026-08-21)
 
 
