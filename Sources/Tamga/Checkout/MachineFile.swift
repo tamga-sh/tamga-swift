@@ -217,6 +217,16 @@ public struct MachineFile: Sendable {
     /// - Parameter fingerprint: the target machine's fingerprint -- HKDF
     ///   `info` for an encrypted file. Decryption fails closed (AES-GCM auth
     ///   failure) if this doesn't match the machine the file was issued for.
+    ///
+    ///   NOTE that this binds an ENCRYPTED file only. A plain machine file is
+    ///   signed but not encrypted, so there is no key derivation to fail and
+    ///   this argument goes unused on that path -- a plain file issued for
+    ///   another machine will verify here. Its binding lives in the signed
+    ///   payload's own `fingerprint` field, which is returned on the `Machine`
+    ///   and which a caller accepting plain files must compare itself. The
+    ///   SDK deliberately does not enforce the match: `tamga-go`'s
+    ///   `MachineFile.Verify` behaves the same way, and making one SDK stricter
+    ///   than the fleet would reject files the others accept.
     /// - Throws: `TamgaCheckoutError.signatureVerificationFailed`,
     ///   `.expired(_:)`, `.decryptionFailed(_:)`, `.unsupportedAlgorithm(_:)`,
     ///   `.schemeNotSupported(_:)` or `.offlineFileFormat(_:)` -- never a

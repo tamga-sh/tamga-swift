@@ -17,7 +17,7 @@ point at <https://tamga.sh> instead.
 ECDSA-P256, RSA PKCS1/PSS, DER), `Checkout/`, `Proof.swift`, and the HTTP surface
 (`TamgaClient`'s 20 endpoints, `Transport`, `AuthTransport`, the JSON:API error model,
 `EntitlementCache`, both heartbeat schedulers, and the full `Policy` struct) are all implemented
-and tested — 252 tests, ~90% line coverage against an 80% gate.
+and tested — 255 tests, ~89% line coverage against an 80% gate.
 
 The normative description of the network surface is `../docs/api-client-contract.md`, derived from
 `tamga-go`. Behavioural changes to `TamgaClient`/`Transport` should update that document too, or
@@ -72,20 +72,31 @@ server-issued fixtures. The whole SDK fleet assumes PKIX/SPKI here, so the same 
 live in the other seven repos. RSA needs no equivalent branch: the server publishes PKCS#1
 `RSAPublicKey` DER and `_RSA.Signing.PublicKey(derRepresentation:)` accepts both encodings.
 
-**`Crypto/Ecdsa.swift` has an explicit curve-OID check most callers would not expect to need.**
+**`Crypto/Ecdsa.swift` has an explicit curve-OID check, and it is worth less than it used to claim.**
 Confirmed directly (empirically, not assumed): CryptoKit's
 `P256.Signing.PublicKey(derRepresentation:)` does NOT validate the curve OID in the
-`AlgorithmIdentifier` it parses, only the resulting coordinate byte length. A hand-crafted SPKI
-declaring the secp256k1 curve OID but carrying a real P-256 point's raw coordinates (same 65-byte
-length) is silently accepted by CryptoKit's own parser. `Ecdsa.swift`'s guard (backed by
-`DER.swift`'s minimal OID extractor) is what actually closes this — it is the exact curve-confusion
-bug class a cross-repo security audit of this SDK family found live in
-`tamga-python`/`tamga-go`/`tamga-dotnet`'s generic `ECDsa`-based verifiers, which had no equivalent
-check. Do not remove this guard to "simplify" the type; see `EcdsaTests.swift`'s regression test for
-what it protects against. It applies to the SPKI branch only, and deliberately: a bare X9.63 point
-declares no curve to confuse, and `P256.Signing.PublicKey(x963Representation:)` rejects any point
-not on P-256 (verified against both a corrupted coordinate and a real P-384 point). Do not "unify"
-the two branches by dropping the OID check.
+`AlgorithmIdentifier` it parses. A hand-crafted SPKI declaring the secp256k1 curve OID but carrying
+a real P-256 point's raw coordinates is silently accepted by CryptoKit's own parser, and
+`Ecdsa.swift`'s guard (backed by `DER.swift`'s minimal OID extractor) is what rejects it.
+
+**But this guard is not what stops a foreign-curve signature verifying, and the note here used to
+say it was.** Measured against the pinned swift-crypto 4.5.1, a key on a genuinely different curve
+is refused by BOTH branches on POINT VALIDITY before any OID is read — a real secp256k1 SPKI and a
+real secp256k1 bare point are each rejected because the coordinates do not satisfy P-256's curve
+equation (BoringSSL's `EC_KEY_check_key`, reached from both initializers). And `verify` is
+hardcoded to build a `P256.Signing.PublicKey`, so the curve the math runs on is fixed at compile
+time and the key cannot choose it. What the OID check genuinely rejects is a *mislabelled* key: a
+real P-256 point wearing another curve's OID, which is a valid P-256 key that would verify
+correctly. Refusing it is hygiene — a key whose own metadata contradicts itself is not trustworthy —
+not forgery prevention.
+
+Keep it anyway. It is cheap, and it is the standing guard on this type never growing a dynamic
+multi-curve dispatch — which is precisely the shape in which this bug class IS a live forgery risk
+in `tamga-python`/`tamga-go`/`tamga-dotnet`'s generic `ECDsa`-based verifiers, where the key really
+does select the curve. Do not "unify" the two branches by dropping it, and do not restate the
+overbroad version of this claim. `EcdsaTests.swift` covers both branches with real
+P-384/secp256k1 keys; note that a P-384 point is 97 bytes and so never reaches the 65-byte
+bare-point branch at all — secp256k1 is the curve that tests it.
 
 **Everything else is hand-rolled, idiomatic Swift.** HTTP transport goes on `URLSession` behind
 the `HTTPRequestPerforming` protocol — no crypto library is used for networking, JSON:API decoding,

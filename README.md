@@ -11,7 +11,7 @@ Two independent surfaces, either usable without the other:
 - **`LicenseFile`, `MachineFile` and `MachineProof`** verify `.lic`/`.machine` files and offline
   proofs with **no network access at all**, once your account's public key is embedded in the app.
 
-Runs on macOS 13+, iOS 16+ and Linux. 252 tests, with an 80% line-coverage gate in CI.
+Runs on macOS 13+, iOS 16+ and Linux. 255 tests, with an 80% line-coverage gate in CI.
 
 ## Install
 
@@ -137,7 +137,16 @@ also accepted); RSA is DER, either PKCS#1 `RSAPublicKey` or `SubjectPublicKeyInf
 
 Machine files are format v2, exactly as license files are: `alg` must end `+v2`, the signed
 payload carries `meta` claims, and `exp` is enforced with the same 60-second tolerance. A file
-whose checkout carried no `ttl` has no `exp` and genuinely never expires. To supply a trusted
+whose checkout carried no `ttl` has no `exp` and genuinely never expires.
+
+> **`fingerprint` binds an *encrypted* machine file, not a plain one.** It is HKDF `info`, so an
+> encrypted file issued for another machine fails to decrypt. A plain machine file is signed but
+> not encrypted, so the argument is unused on that path and the file is portable between machines
+> as far as this SDK is concerned. If you accept plain machine files, compare the returned
+> `machine.fingerprint` against your own — the SDK gives you the value but does not enforce the
+> match. This matches the rest of the Tamga SDK fleet.
+
+To supply a trusted
 timestamp instead of the local clock, or to read `iat`/`jti`/`kid` back, use
 `verifyWithClaims(scheme:publicKey:licenseKey:fingerprint:now:)`:
 

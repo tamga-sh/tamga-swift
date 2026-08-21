@@ -9,14 +9,19 @@ import Foundation
 ///
 /// Why this exists: confirmed directly (empirically, not from documentation)
 /// that `CryptoKit`'s `P256.Signing.PublicKey(derRepresentation:)` does NOT
-/// validate the curve OID in the `AlgorithmIdentifier` it parses -- only the
-/// resulting coordinate byte length. A hand-crafted SPKI declaring the
-/// secp256k1 curve OID but carrying a real P-256 point's raw coordinates
-/// (same 65-byte x963 length) was silently accepted and parsed as if it
-/// were a genuine P-256 key. This is the same curve-confusion bug class
-/// this SDK family's own audit found live in tamga-python/go/dotnet's
-/// generic `ECDsa`-based verifiers -- see `Ecdsa.swift`'s explicit guard,
-/// which this type exists to support.
+/// validate the curve OID in the `AlgorithmIdentifier` it parses. A
+/// hand-crafted SPKI declaring the secp256k1 curve OID but carrying a real
+/// P-256 point's raw coordinates is silently accepted and parsed as if it
+/// were a genuine P-256 key -- which, coordinates aside, it is.
+///
+/// Read `Ecdsa.swift`'s SECURITY note before drawing a conclusion about what
+/// that means: a key on a genuinely different curve is already refused on
+/// point validity by both of that type's paths, so the OID check catches a
+/// MISLABELLED key rather than a foreign-curve forgery. It is defence in
+/// depth against `Ecdsa` ever growing a dynamic multi-curve dispatch -- the
+/// shape in which this bug class IS live in tamga-python/go/dotnet's generic
+/// `ECDsa`-based verifiers -- not the thing standing between this SDK and a
+/// forged signature today.
 enum DER {
     struct Element {
         let tag: UInt8

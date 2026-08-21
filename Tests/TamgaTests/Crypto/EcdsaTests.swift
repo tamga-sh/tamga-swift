@@ -41,22 +41,22 @@ struct EcdsaTests {
         #expect(!Ecdsa.verify(publicKey: derKey, message: message, signature: signature.derRepresentation))
     }
 
-    /// Regression test for the curve-confusion bug class this SDK family's
-    /// own cross-repo audit found live in tamga-python/go/dotnet: a
-    /// generic ECDSA verifier that never checks the key's own curve before
-    /// trusting it.
+    /// The SPKI branch's OID check, tested on the only input that actually
+    /// isolates it: a real P-256 point wearing the secp256k1 OID
+    /// (1.3.132.0.10). Confirmed directly (empirically) that
+    /// `P256.Signing.PublicKey(derRepresentation:)` does NOT validate that
+    /// OID, so this key parses fine without the guard and this test would
+    /// return `true` instead of `false`.
     ///
-    /// This is NOT a hypothetical for Swift specifically -- confirmed
-    /// directly (empirically) that `CryptoKit`'s
-    /// `P256.Signing.PublicKey(derRepresentation:)` does NOT validate the
-    /// curve OID in the `AlgorithmIdentifier` it parses, only the resulting
-    /// coordinate byte length. A hand-crafted SPKI declaring the secp256k1
-    /// curve OID (1.3.132.0.10) but carrying a real P-256 point's raw
-    /// coordinates (same 65-byte x963 length, so the length check alone
-    /// doesn't catch it) is silently accepted by CryptoKit's own parser.
-    /// `Ecdsa.verify`'s explicit OID check (see `Ecdsa.swift` and
-    /// `DER.swift`) is what actually closes this -- without it, this exact
-    /// test would pass with a `true` result instead of `false`.
+    /// Do NOT read this as "a foreign-curve signature would otherwise verify".
+    /// It would not: a key on a genuinely different curve is rejected on point
+    /// validity by both branches (see `verifyRejectsSameLengthWrongCurvePoint`,
+    /// which uses a real secp256k1 point), and `Ecdsa.verify` is hardcoded to
+    /// P-256 math anyway. What this pins is that a key whose own metadata
+    /// contradicts its coordinates is refused rather than quietly trusted --
+    /// and that the guard is still there to keep the type from drifting into
+    /// the dynamic multi-curve dispatch that made this a live forgery bug in
+    /// tamga-python/go/dotnet.
     @Test("verify returns false for a mismatched curve OID, even when the coordinate length matches P-256's")
     func verifyReturnsFalseForMismatchedCurveOIDWithMatchingCoordinateLength() throws {
         let key = P256.Signing.PrivateKey()
@@ -84,6 +84,82 @@ struct EcdsaTests {
 
         #expect(!Ecdsa.verify(publicKey: Data(mislabeledSPKI), message: message, signature: derSignature))
     }
+
+    // MARK: - The bare 65-byte X9.63 branch
+
+    /// The server publishes `ecdsa_public_key` as a bare uncompressed point,
+    /// not SPKI, so this branch is the one every genuine ECDSA machine file
+    /// goes through. The server-issued fixtures cover it end to end; this
+    /// covers it directly.
+    @Test("verify accepts the bare 65-byte uncompressed point the server actually publishes")
+    func verifyAcceptsBareUncompressedPoint() throws {
+        let key = P256.Signing.PrivateKey()
+        let message = Data("machine file payload".utf8)
+        let signature = try key.signature(for: message)
+
+        let point = key.publicKey.x963Representation
+        #expect(point.count == 65)
+        #expect(point.first == 0x04)
+        #expect(Ecdsa.verify(publicKey: point, message: message, signature: signature.derRepresentation))
+    }
+
+    /// The bare-point branch is the ONLY one with no curve OID to check, so
+    /// what stops curve confusion there is `x963Representation`'s own
+    /// on-curve validation -- an assumption about the crypto library, which is
+    /// exactly the kind that needs a standing test rather than a comment.
+    ///
+    /// The P-384 case elsewhere in this suite does NOT cover this: a P-384
+    /// point is 97 bytes and never takes the 65-byte dispatch. secp256k1 is
+    /// the curve that does — its uncompressed points are 65 bytes too, so its
+    /// generator reaches this branch and must still be refused.
+    @Test("verify rejects a real wrong-curve point of the same 65-byte length (secp256k1 generator)")
+    func verifyRejectsSameLengthWrongCurvePoint() throws {
+        // secp256k1's generator G. A real point on a real curve, and
+        // definitively not on P-256.
+        let gx = Data([
+            0x79, 0xBE, 0x66, 0x7E, 0xF9, 0xDC, 0xBB, 0xAC, 0x55, 0xA0, 0x62, 0x95, 0xCE, 0x87, 0x0B, 0x07,
+            0x02, 0x9B, 0xFC, 0xDB, 0x2D, 0xCE, 0x28, 0xD9, 0x59, 0xF2, 0x81, 0x5B, 0x16, 0xF8, 0x17, 0x98
+        ])
+        let gy = Data([
+            0x48, 0x3A, 0xDA, 0x77, 0x26, 0xA3, 0xC4, 0x65, 0x5D, 0xA4, 0xFB, 0xFC, 0x0E, 0x11, 0x08, 0xA8,
+            0xFD, 0x17, 0xB4, 0x48, 0xA6, 0x85, 0x54, 0x19, 0x9C, 0x47, 0xD0, 0x8F, 0xFB, 0x10, 0xD4, 0xB8
+        ])
+        var point = Data([0x04])
+        point.append(gx)
+        point.append(gy)
+
+        // Same length as a P-256 point, so the length check alone cannot catch it.
+        #expect(point.count == 65)
+
+        // Asserted at the library boundary, not just through `verify`. A test
+        // that only checked `verify(...) == false` would pass even if the key
+        // were accepted, because the signature it supplied would not have
+        // verified either way -- it would assert nothing about the branch.
+        #expect(throws: (any Error).self) {
+            _ = try P256.Signing.PublicKey(x963Representation: point)
+        }
+        #expect(!Ecdsa.verify(publicKey: point, message: Data("payload".utf8),
+                              signature: Data(repeating: 0, count: 71)))
+    }
+
+    @Test("verify rejects a bare point that is not on the P-256 curve")
+    func verifyRejectsOffCurveBarePoint() throws {
+        let key = P256.Signing.PrivateKey()
+        let message = Data("machine file payload".utf8)
+        let signature = try key.signature(for: message)
+
+        var offCurve = Data(key.publicKey.x963Representation)
+        offCurve[offCurve.count - 1] ^= 0x01 // one bit of Y: no longer satisfies the curve equation
+        #expect(offCurve.count == 65)
+
+        // Same reasoning as above: pin the rejection where it actually happens.
+        #expect(throws: (any Error).self) {
+            _ = try P256.Signing.PublicKey(x963Representation: offCurve)
+        }
+        #expect(!Ecdsa.verify(publicKey: offCurve, message: message, signature: signature.derRepresentation))
+    }
+
+    // MARK: - Malformed input
 
     @Test("verify returns false, not a crash, for a malformed public key")
     func verifyReturnsFalseForMalformedKey() {
