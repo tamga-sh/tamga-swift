@@ -40,11 +40,31 @@ public enum AuthTransport: Sendable, Equatable {
     /// `Authorization: License <key>` -- the primary transport for an embedded
     /// client validating against a raw license key.
     case licenseKey(String)
-    /// `Cookie: Tamga-Session=<uuid>`.
+    /// `Cookie: Tamga-Session=<uuid>`, plus an `Origin` header.
     ///
-    /// Provided for completeness. This form is browser and portal oriented --
-    /// the server pairs it with an `Origin` check -- and is rarely the right
-    /// choice for a non-browser consumer.
+    /// **The `Origin` is not optional, and this transport authenticated
+    /// nothing without it.** The server resolves a cookie credential only when
+    /// the request's `Origin` equals its configured `portal_origin`; when it
+    /// does not, `resolve_request_bearer` returns `Ok(None)`
+    /// (`shared/auth/context.rs:277-289`) -- the request is **silently
+    /// downgraded to unauthenticated** rather than rejected, and then 401s on
+    /// the first non-public route with an error saying no credentials were
+    /// provided. A caller reading that error has no way to tell a refused
+    /// cookie from an absent one.
+    ///
+    /// `TamgaClient` now sends that header for this case and no other, using
+    /// `TamgaClient.defaultPortalOrigin` unless the `origin:` initializer
+    /// argument names something else. **The origin lives on the client, not in
+    /// this case's payload.** It is not part of the credential -- it describes
+    /// the browsing context the request claims to come from -- and keeping it
+    /// out of here means the enum's case list is unchanged, so no consumer's
+    /// exhaustive `switch` over `AuthTransport` stops compiling to gain the
+    /// fix.
+    ///
+    /// Still browser and portal oriented, and still rarely the right choice
+    /// for a non-browser consumer: `.licenseKey` is what an embedded client
+    /// wants. What has changed is that choosing it no longer guarantees
+    /// failure.
     case sessionCookie(String)
     /// `?token=<token>`.
     ///

@@ -63,6 +63,16 @@ public struct TamgaClient: Sendable {
     /// The `Tamga-Version` sent unless overridden.
     public static let defaultAPIVersion = Transport.defaultAPIVersion
 
+    /// The `Origin` sent alongside a session-cookie credential when the caller
+    /// names none: the server's own `TAMGA_PORTAL_ORIGIN` default,
+    /// `https://app.tamga.sh` (`config.rs:256-258`).
+    ///
+    /// A self-hosted server that sets a different portal origin needs the
+    /// matching value passed as `origin:`; the server compares the header for
+    /// exact equality, so a differing scheme, port or trailing slash fails the
+    /// same way a missing header does.
+    public static let defaultPortalOrigin = Transport.defaultPortalOrigin
+
     /// How many times a rate-limited request is retried unless overridden.
     public static let defaultMaxRetries = Transport.defaultMaxRetries
 
@@ -85,6 +95,16 @@ public struct TamgaClient: Sendable {
     ///     path.
     ///   - apiVersion: The `Tamga-Version` header. Override only deliberately.
     ///   - otp: A TOTP code, sent as `Tamga-OTP` on every request.
+    ///   - origin: The `Origin` header value sent **only** with
+    ///     `AuthTransport.sessionCookie`, defaulting to
+    ///     `defaultPortalOrigin`. Cookie auth does not work without it: the
+    ///     server downgrades a cookie-bearing request whose `Origin` does not
+    ///     equal its configured portal origin to *unauthenticated*
+    ///     (`shared/auth/context.rs:277-289`), which then surfaces as a `401`
+    ///     saying no credential was supplied rather than that the cookie was
+    ///     refused. Ignored by the other six transports on purpose -- an
+    ///     `Origin` on `quickValidate` suppresses its `last_validated_at`
+    ///     write (`quick_validate.rs:35-37`).
     ///   - maxRetries: How many times a rate-limited request is retried. Zero
     ///     disables retrying.
     ///   - timeout: Per-request timeout.
@@ -94,6 +114,7 @@ public struct TamgaClient: Sendable {
         host: String = TamgaClient.defaultHost,
         apiVersion: String = TamgaClient.defaultAPIVersion,
         otp: String? = nil,
+        origin: String? = nil,
         maxRetries: Int = TamgaClient.defaultMaxRetries,
         timeout: TimeInterval = TamgaClient.defaultTimeout,
         maxResponseBytes: Int = TamgaClient.defaultMaxResponseBytes
@@ -113,7 +134,7 @@ public struct TamgaClient: Sendable {
         // and is otherwise bounded only by the platform default resource timeout of seven days.
         configuration.timeoutIntervalForResource = timeout * 4
         self.init(accountId: accountId, auth: auth, host: host, apiVersion: apiVersion,
-                  otp: otp, maxRetries: maxRetries,
+                  otp: otp, origin: origin, maxRetries: maxRetries,
                   performer: URLSessionTransport(configuration: configuration,
                                                  maxResponseBytes: maxResponseBytes),
                   maxResponseBytes: maxResponseBytes)
@@ -129,6 +150,7 @@ public struct TamgaClient: Sendable {
         host: String = TamgaClient.defaultHost,
         apiVersion: String = TamgaClient.defaultAPIVersion,
         otp: String? = nil,
+        origin: String? = nil,
         maxRetries: Int = TamgaClient.defaultMaxRetries,
         performer: any HTTPRequestPerforming,
         maxResponseBytes: Int = TamgaClient.defaultMaxResponseBytes,
@@ -143,6 +165,7 @@ public struct TamgaClient: Sendable {
             otp: otp,
             userAgent: Self.userAgent,
             auth: auth,
+            origin: origin,
             maxRetries: max(0, maxRetries),
             maxResponseBytes: maxResponseBytes,
             jitterMilliseconds: jitterMilliseconds
@@ -209,11 +232,16 @@ public struct TamgaClient: Sendable {
     /// - **To validate without side effects, use `validateById` with
     ///   `ValidateOptions(skipTouch: true)`.** That is the only route that
     ///   honours the request.
-    /// - **A proxy that injects `Origin` silently disables the write.** This SDK
-    ///   never sets that header itself, but if something in front of it does,
-    ///   `last_validated_at` stays null -- which keeps a never-activated license
-    ///   reporting `INACTIVE` and keeps the check-in-overdue worker firing
-    ///   against `created_at` forever. Checking in does not substitute; that
+    /// - **Anything that puts an `Origin` on the request silently disables the
+    ///   write.** The check is `headers.contains_key(ORIGIN)`
+    ///   (`quick_validate.rs:35`) -- presence, not value. A proxy in front of
+    ///   this SDK does it, a browser does it, and so does this SDK itself for
+    ///   exactly one configuration: `AuthTransport.sessionCookie`, which cannot
+    ///   authenticate at all without that header. Under that transport
+    ///   `last_validated_at` stays null -- which keeps a never-activated
+    ///   license reporting `INACTIVE` and keeps the check-in-overdue worker
+    ///   firing against `created_at` forever. The other six transports send no
+    ///   `Origin` and are unaffected. Checking in does not substitute; that
     ///   writes a different column.
     public func quickValidate(_ licenseId: String) async throws -> ValidationMeta {
         let data = try await transport.getJSON(["licenses", licenseId, "actions", "validate"])

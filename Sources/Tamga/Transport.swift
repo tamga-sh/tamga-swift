@@ -27,6 +27,11 @@ struct Transport: Sendable {
     /// Default number of retries for a rate-limited request.
     static let defaultMaxRetries = 3
 
+    /// The `Origin` sent with a session-cookie credential when the caller
+    /// names none -- the server's own `TAMGA_PORTAL_ORIGIN` default
+    /// (`config.rs:256-258`).
+    static let defaultPortalOrigin = "https://app.tamga.sh"
+
     /// Upper bound applied to a server-supplied `Retry-After`, in seconds.
     static let maxRetryAfterSeconds = 60
 
@@ -83,6 +88,7 @@ struct Transport: Sendable {
     private let otp: String?
     private let userAgent: String
     private let auth: AuthTransport
+    private let origin: String?
     private let maxRetries: Int
     private let maxResponseBytes: Int
     /// Injected so retry backoff is deterministic under test. Returns the
@@ -97,6 +103,7 @@ struct Transport: Sendable {
         otp: String?,
         userAgent: String,
         auth: AuthTransport,
+        origin: String? = nil,
         maxRetries: Int,
         maxResponseBytes: Int = Transport.maxResponseBytes,
         jitterMilliseconds: @escaping @Sendable () -> UInt64 = { UInt64.random(in: 0..<1000) }
@@ -108,9 +115,43 @@ struct Transport: Sendable {
         self.otp = otp
         self.userAgent = userAgent
         self.auth = auth
+        self.origin = origin
         self.maxRetries = maxRetries
         self.maxResponseBytes = maxResponseBytes
         self.jitterMilliseconds = jitterMilliseconds
+    }
+
+    /// The `Origin` this request should carry, or `nil` for no header.
+    ///
+    /// **Only the session-cookie credential gets one, and that narrowness is
+    /// the point.** Cookie auth cannot work without it: `resolve_request_bearer`
+    /// downgrades a cookie-bearing request whose `Origin` does not equal the
+    /// server's configured `portal_origin` to *unauthenticated* and returns
+    /// `Ok(None)` (`shared/auth/context.rs:277-289`), so the request then 401s
+    /// on any non-public route with "no credentials" rather than "cookie
+    /// rejected".
+    ///
+    /// Sending it on the other six transports would be a real regression, not
+    /// dead weight: `GET /licenses/{id}/actions/validate` skips its
+    /// `last_validated_at` write whenever the request carries an `Origin` at
+    /// all (`quick_validate.rs:35-37`), and it does not care what the value is.
+    /// A blanket `Origin` would silently stop `quickValidate` touching the
+    /// licence -- which keeps a never-activated licence reporting `INACTIVE`
+    /// and keeps the check-in-overdue worker firing against `created_at`
+    /// forever.
+    ///
+    /// The comparison server-side is exact `HeaderValue` equality, so this must
+    /// match `TAMGA_PORTAL_ORIGIN` byte for byte -- scheme, host, and port, no
+    /// trailing slash.
+    ///
+    /// Note what this gate is and is not. `Origin` is set by the browser and
+    /// unforgeable from page script, which makes the check a CSRF control for
+    /// the portal. Nothing stops a non-browser client sending any value it
+    /// likes, this one included, so satisfying the gate here is a
+    /// configuration step and not a claim to any browser's authority.
+    private var originHeader: String? {
+        guard case .sessionCookie = auth else { return nil }
+        return origin ?? Self.defaultPortalOrigin
     }
 
     // MARK: - Requests
@@ -292,6 +333,11 @@ struct Transport: Sendable {
         }
         if sendsCredential, let header = auth.header {
             request.setValue(header.value, forHTTPHeaderField: header.name)
+        }
+        // Rides with the credential, and only with the credential: an
+        // anonymous route sends neither. See `originHeader`.
+        if sendsCredential, let origin = originHeader {
+            request.setValue(origin, forHTTPHeaderField: "Origin")
         }
         return request
     }

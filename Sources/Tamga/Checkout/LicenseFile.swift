@@ -84,19 +84,7 @@ public struct LicenseFile: Sendable {
     /// - Throws: `TamgaCheckoutError.unsupportedAlgorithm` if `alg` does not
     ///   contain `"ed25519"`.
     public func verify(publicKey: Data) throws -> Bool {
-        // Exact match against the two documented literal values (see
-        // type-level remarks) rather than substring matching -- unlike
-        // MachineFile's `alg`, which is a compound
-        // encryption-prefix/signature-suffix string across 5 schemes,
-        // LicenseFile's `alg` is always ed25519 and always one of exactly
-        // these two literals, so exact equality is both correct and
-        // stricter.
-        guard certificate.alg == "base64+ed25519+v2" || certificate.alg == "aes-256-gcm+ed25519+v2" else {
-            throw TamgaCheckoutError.unsupportedAlgorithm(
-                "Unsupported license file algorithm: '\(certificate.alg)'. " +
-                "Only ed25519-signed license files are supported."
-            )
-        }
+        try validateAlgorithm()
 
         guard let signature = Data(base64Encoded: certificate.sig) else {
             return false
@@ -108,6 +96,25 @@ public struct LicenseFile: Sendable {
         // type-level remarks above.
         let message = Data(certificate.enc.utf8)
         return Ed25519.verify(publicKey: publicKey, message: message, signature: signature)
+    }
+
+    /// Rejects an `alg` this type cannot verify, before any key is looked at.
+    ///
+    /// Exact match against the two documented literal values (see type-level
+    /// remarks) rather than substring matching -- unlike MachineFile's `alg`,
+    /// which is a compound encryption-prefix/signature-suffix string across 5
+    /// schemes, LicenseFile's `alg` is always ed25519 and always one of exactly
+    /// these two literals, so exact equality is both correct and stricter.
+    ///
+    /// Split out of `verify(publicKey:)` so the key-set path can raise a bad
+    /// `alg` once, up front, instead of once per candidate key.
+    func validateAlgorithm() throws {
+        guard certificate.alg == "base64+ed25519+v2" || certificate.alg == "aes-256-gcm+ed25519+v2" else {
+            throw TamgaCheckoutError.unsupportedAlgorithm(
+                "Unsupported license file algorithm: '\(certificate.alg)'. " +
+                "Only ed25519-signed license files are supported."
+            )
+        }
     }
 
     /// Full verify pipeline: verifies the Ed25519 signature (fails closed),
@@ -202,7 +209,34 @@ public struct LicenseFile: Sendable {
         return (License.fromResource(payload.data), claims)
     }
 
-    private static func decryptPayload(_ payloadBytes: Data, licenseKey: String) throws -> Data {
+    /// The signed claims, read **without** verifying the signature.
+    ///
+    /// Diagnostic only, and used from exactly one place: after every key in a
+    /// caller-supplied key set has failed to verify this file, the `kid` claim
+    /// is the only thing that separates "signed by a key I do not have" from
+    /// "forged". Returns `nil` rather than throwing for every failure -- a
+    /// wrong licence key, a corrupt payload, a pre-v2 file with no claims --
+    /// because at that point the caller gets
+    /// `TamgaCheckoutError.signatureVerificationFailed` either way.
+    ///
+    /// Nothing else in this type reads unverified bytes, and nothing derived
+    /// from these claims is ever returned to a caller as a `License`.
+    func unverifiedClaims(licenseKey: String) -> LicenseFileClaims? {
+        guard let payloadBytes = Data(base64Encoded: certificate.enc) else { return nil }
+        let jsonBytes: Data
+        if certificate.alg == "aes-256-gcm+ed25519+v2" {
+            guard let decrypted = try? Self.decryptPayload(payloadBytes, licenseKey: licenseKey) else {
+                return nil
+            }
+            jsonBytes = decrypted
+        } else {
+            jsonBytes = payloadBytes
+        }
+        return try? TamgaJSONCoding.decoder
+            .decode(JSONAPIPayload<LicenseAttributes>.self, from: jsonBytes).meta
+    }
+
+    static func decryptPayload(_ payloadBytes: Data, licenseKey: String) throws -> Data {
         let key = Hkdf.deriveLicenseFileKey(licenseKey: licenseKey)
         // Concatenated, NOT dot-separated: `encode_license_file` base64s a
         // single `nonce ‖ ciphertext ‖ tag` buffer, where the machine-file
