@@ -86,19 +86,26 @@ extension TamgaClient {
     /// Fast path first: a same-licence conflict names the machine in
     /// `meta.machineId` (`TamgaError.conflictingMachineId`), so one
     /// `getMachine` replaces the search. The search is the fallback for a
-    /// pre-patch server, a conflict that carried no `meta`, and the race
-    /// where the named row was deleted between the two calls -- the read
-    /// `404`s, the search finds nothing, and the caller rethrows the `409`,
-    /// never the `404`. Only a same-licence conflict carries `meta`, so an
-    /// adopted machine is always the caller's own seat; the search keeps the
-    /// licence scoping documented on `reactivateMachine` for the same reason.
+    /// pre-patch server, a conflict that carried no `meta`, the race where
+    /// the named row was deleted between the two calls (the read `404`s),
+    /// and the fast path returning a machine whose fingerprint does not
+    /// actually match -- the fast path trusts `meta.machineId` but not
+    /// the row it points at, so it is re-checked exactly like the search's
+    /// own result is. In every fallback case the search finds nothing and
+    /// the caller rethrows the `409`, never a synthesized `404`. Only a
+    /// same-licence conflict carries `meta`, so an adopted machine is always
+    /// the caller's own seat; the search keeps the licence scoping documented
+    /// on `reactivateMachine` for the same reason.
     private func resolveTakenFingerprint(
         _ conflict: TamgaError,
         options: CreateMachineOptions
     ) async throws -> Machine? {
         if let machineId = conflict.conflictingMachineId {
             do {
-                return try await getMachine(machineId)
+                let existing = try await getMachine(machineId)
+                if existing.fingerprint == options.fingerprint {
+                    return existing
+                }
             } catch let error as TamgaError where error.isNotFound {
                 // Fall through to the search.
             }

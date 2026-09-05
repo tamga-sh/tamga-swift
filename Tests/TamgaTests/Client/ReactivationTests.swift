@@ -156,6 +156,26 @@ struct ReactivationTests {
             == "/v1/accounts/acct-123/licenses/lic-1/actions/validate")
     }
 
+    @Test("a fast-path machine whose fingerprint does not match falls back to the search")
+    func conflictWithMetaButMismatchedFingerprintFallsBackToSearch() async throws {
+        let performer = MockPerformer()
+        await performer.enqueue(status: 409, body: SurfaceFixtures.sameLicenseConflict(machineId: "mach-9"))
+        // The named row exists, but it does not actually carry this
+        // fingerprint -- the fast path must not trust it blindly.
+        await performer.enqueue(body: SurfaceFixtures.machine(id: "mach-9", fingerprint: "fp-other"))
+        await performer.enqueue(body: SurfaceFixtures.machineList(["fp-1"]))
+        await performer.enqueue(body: Fixtures.licenseWithMeta())
+
+        let result = try await TamgaClient.mocked(performer).reactivateMachine(Self.options)
+
+        #expect(result.machine.id == "mach-0")
+        #expect(result.machine.fingerprint == "fp-1")
+        #expect(await performer.requestCount == 4)
+        let search = await performer.request(at: 2)
+        #expect(search?.url?.path == "/v1/accounts/acct-123/machines")
+        #expect(search?.url?.query?.contains("filter%5Blicense%5D=lic-1") == true)
+    }
+
     @Test("a 409 without meta falls back to the licence-scoped search")
     func conflictWithoutMetaSearches() async throws {
         let performer = MockPerformer()
