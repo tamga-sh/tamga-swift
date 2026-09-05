@@ -290,8 +290,9 @@ specification covers the full set, including analytics/EE items that don't touch
   silently collapses to its last occurrence.
 - **A machine resource carries no `license_id` and no `relationships`.** No serializer in the API
   emits a relationships block. So nothing client-side can tell which licence a machine belongs to,
-  which is why `reactivateMachine`'s fingerprint lookup is account-wide and why
-  `Scope(fingerprint:)` is the only membership check available.
+  which is why `reactivateMachine`'s fingerprint lookup is licence-scoped in the query
+  (`filter[license]`) and, since the API patch, prefers the `meta.machineId` a same-licence `409`
+  carries, and why `Scope(fingerprint:)` is the only membership check available.
 - **The process reaper is dead code.** No server job deletes a process row, ever, and processes
   count against `policy.max_processes`. `deleteProcess` / `ProcessHeartbeatScheduler.stopAndDelete`
   are the only things that clean up.
@@ -302,12 +303,12 @@ specification covers the full set, including analytics/EE items that don't touch
   fails `401 LICENSE_NOT_ALLOWED` — a policy configuration precondition, not a retryable auth
   failure. Separately, an expired license still authenticates under three of the four expiration
   strategies and only fails `401 LICENSE_EXPIRED` under `REVOKE_ACCESS`.
-- **16 of 24 `ValidationCode` values are reachable.** Model all 24 with lenient/unknown-value
-  decoding, but don't build UI/UX around the 8 that are declared and never emitted
-  (`BANNED`, `TOO_MANY_USERS`, `HEARTBEAT_DEAD`, `HEARTBEAT_NOT_STARTED`,
+- **19 of 24 `ValidationCode` values are reachable.** Model all 24 with lenient/unknown-value
+  decoding, but don't build UI/UX around the 5 that are declared and never emitted (`BANNED`,
   `COMPONENTS_SCOPE_MISMATCH`, `CHECKSUM_SCOPE_MISMATCH`, `VERSION_SCOPE_MISMATCH`, and
-  `NOT_FOUND` which surfaces as an HTTP 404 instead of this code). `ENTITLEMENTS_MISSING` and
-  `FINGERPRINT_SCOPE_MISMATCH` moved onto the reachable side — see the `Scope` bullet below.
+  `NOT_FOUND` which surfaces as an HTTP 404 instead of this code). `HEARTBEAT_NOT_STARTED`/
+  `HEARTBEAT_DEAD` are emitted by the fingerprint scope under `require_heartbeat` and
+  `TOO_MANY_USERS` by all three validate routes since the API patch; none joins the rollback set.
 - **`Scope`: six fields enforced, two that break the call.** `product`/`policy`/`user`/
   `environment` were always enforced; `entitlements` and `fingerprint` now genuinely are.
   `entitlements` takes entitlement **codes** (not the attach/detach UUIDs), compared

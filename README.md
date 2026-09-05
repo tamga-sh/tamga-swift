@@ -295,8 +295,8 @@ the API publishes, not the decoded bytes — hex-encoded, so sixteen characters.
 `TamgaClient.listSigningKeys()` fetches it, but that route needs the `account.read` permission and
 a license-key credential does not hold it — an embedded client gets `403`. Build the set from keys
 pinned into the app instead; an offline verifier that only works while it has a network is not
-offline. An empty result from the endpoint is also normal rather than a fault: the key table is
-written only by a rotation, so an account that has never rotated has no rows at all.
+offline. An empty result from the endpoint marks a pre-patch server: since the API patch every
+account publishes its active key from creation and existing accounts were backfilled.
 
 **Machine files: Ed25519 only.** The server computes a machine file's `kid` from the account's
 Ed25519 key whatever scheme actually signed the file, so for an RSA- or ECDSA-signed machine file
@@ -420,8 +420,10 @@ deliberate boundaries, not oversights.
   different one, and match it exactly. One consequence rides along: any request carrying an
   `Origin` makes `quickValidate` skip its `last_validated_at` write, so under cookie auth that
   write does not happen.
-- **8 of the 24 `ValidationCode` values are unreachable.** All 24 are modelled;
+- **5 of the 24 `ValidationCode` values are unreachable.** All 24 are modelled;
   `ValidationCode.isReachable` reports which. Do not build behaviour on an unreachable one.
+  `heartbeatNotStarted`, `heartbeatDead` (fingerprint scope under `requireHeartbeat`) and
+  `tooManyUsers` are reachable since the API patch.
 - **Six of the eight `Scope` fields are enforced** — product, policy, user, environment,
   fingerprint and entitlements. `version` and `checksum` are not sent at all: present on the
   request they make the server reject the whole validate call with `422 SCOPE_NOT_SUPPORTED`.
