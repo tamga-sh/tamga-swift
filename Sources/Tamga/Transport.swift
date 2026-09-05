@@ -361,7 +361,8 @@ struct Transport: Sendable {
             title: entry?.title,
             id: entry?.id,
             pointer: entry?.source?.pointer,
-            responseMetadata: metadata
+            responseMetadata: metadata,
+            meta: entry?.meta ?? [:]
         ))
     }
 }

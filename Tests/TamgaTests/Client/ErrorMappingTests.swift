@@ -87,7 +87,8 @@ struct ErrorMappingTests {
         let codes = ["NOT_FOUND", "UNAUTHORIZED", "FORBIDDEN", "INTERNAL_SERVER_ERROR",
                      "KEY_TAKEN", "FINGERPRINT_TAKEN", "PID_TAKEN", "CHECK_IN_NOT_REQUIRED",
                      "TTL_INVALID", "LICENSE_NOT_ENCRYPTED", "LICENSE_KEY_MISSING",
-                     "SCHEME_NOT_SUPPORTED", "DATASET_INVALID"]
+                     "SCHEME_NOT_SUPPORTED", "DATASET_INVALID",
+                     "SIGNING_KEY_MISSING", "SECRET_KEY_MISSING"]
 
         for code in codes {
             let performer = MockPerformer()
@@ -176,5 +177,80 @@ struct ErrorMappingTests {
         #expect(metadata.tamgaEdition.isEmpty)
         #expect(metadata.tamgaMode.isEmpty)
         #expect(metadata.tamgaVersion.isEmpty)
+    }
+
+    @Test("a numeric status decodes the same as the string the server renders")
+    func numericStatusDecodesLikeAString() async {
+        // JSON:API renders status as "422"; the D18 fixture sends 422. Both
+        // must keep the code -- a failed decode would hide it behind UNKNOWN.
+        let bodies = [
+            "{\"errors\":[{\"status\":\"422\",\"code\":\"SIGNING_KEY_MISSING\",\"detail\":\"no key\"}]}",
+            "{\"errors\":[{\"status\":422,\"code\":\"SIGNING_KEY_MISSING\",\"detail\":\"no key\"}]}"
+        ]
+        for body in bodies {
+            let performer = MockPerformer()
+            await performer.enqueue(status: 422, body: body)
+            let error = await apiError(from: performer)
+            #expect(error?.code == TamgaAPIErrorCode.signingKeyMissing)
+            #expect(error?.httpStatus == 422)
+            #expect(error?.detail == "no key")
+        }
+    }
+
+    @Test("scalar meta members are kept, nested ones dropped, absent meta is empty")
+    func metaDecodesLeniently() async {
+        // Exact wire shape from the API plan for a same-licence conflict,
+        // padded with the member kinds a lenient reader has to survive.
+        let performer = MockPerformer()
+        await performer.enqueue(status: 409, body: """
+        {"errors":[{"status":"409","code":"FINGERPRINT_TAKEN","detail":"taken",\
+        "meta":{"machineId":"mach-7","count":2,"flag":true,"nested":{"x":1},"list":[1],"none":null}}]}
+        """)
+        let decoded = await apiError(from: performer)
+        #expect(decoded?.meta == ["machineId": "mach-7", "count": "2", "flag": "true"])
+        #expect(decoded?.code == TamgaAPIErrorCode.fingerprintTaken)
+
+        // No meta at all: an empty dictionary, never nil, never a failure.
+        let bare = MockPerformer()
+        await bare.enqueue(status: 409, body: "{\"errors\":[{\"code\":\"FINGERPRINT_TAKEN\"}]}")
+        #expect(await apiError(from: bare)?.meta == [:])
+
+        // A malformed meta must not cost the code.
+        let malformed = MockPerformer()
+        await malformed.enqueue(status: 409,
+                                body: "{\"errors\":[{\"code\":\"FINGERPRINT_TAKEN\",\"meta\":\"junk\"}]}")
+        let survived = await apiError(from: malformed)
+        #expect(survived?.code == TamgaAPIErrorCode.fingerprintTaken)
+        #expect(survived?.meta == [:])
+    }
+
+    @Test("conflictingMachineId is set only for a FINGERPRINT_TAKEN that names one")
+    func conflictingMachineIdIsNarrow() {
+        let metadata = ResponseMetadata(tamgaVersion: nil, tamgaEdition: nil,
+                                        tamgaMode: nil, requestId: nil)
+        func apiError(code: String, meta: [String: String]) -> TamgaError {
+            .api(TamgaError.APIError(code: code, httpStatus: 409, detail: nil, title: nil, id: nil,
+                                     pointer: nil, responseMetadata: metadata, meta: meta))
+        }
+        let taken = TamgaAPIErrorCode.fingerprintTaken
+        #expect(apiError(code: taken, meta: ["machineId": "mach-1"]).conflictingMachineId == "mach-1")
+        #expect(apiError(code: taken, meta: [:]).conflictingMachineId == nil)
+        #expect(apiError(code: taken, meta: ["machineId": ""]).conflictingMachineId == nil)
+        #expect(apiError(code: "KEY_TAKEN", meta: ["machineId": "mach-1"]).conflictingMachineId == nil)
+        #expect(TamgaError.transport(message: "boom", underlying: nil).conflictingMachineId == nil)
+    }
+
+    @Test("the key-material codes are recognized")
+    func keyMaterialCodesAreRecognized() {
+        let metadata = ResponseMetadata(tamgaVersion: nil, tamgaEdition: nil,
+                                        tamgaMode: nil, requestId: nil)
+        func apiError(code: String) -> TamgaError {
+            .api(TamgaError.APIError(code: code, httpStatus: 422, detail: nil, title: nil, id: nil,
+                                     pointer: nil, responseMetadata: metadata))
+        }
+        #expect(apiError(code: TamgaAPIErrorCode.signingKeyMissing).isSigningKeyMissing)
+        #expect(!apiError(code: TamgaAPIErrorCode.secretKeyMissing).isSigningKeyMissing)
+        #expect(apiError(code: TamgaAPIErrorCode.secretKeyMissing).apiCode == "SECRET_KEY_MISSING")
+        #expect(!apiError(code: TamgaAPIErrorCode.forbidden).isSigningKeyMissing)
     }
 }

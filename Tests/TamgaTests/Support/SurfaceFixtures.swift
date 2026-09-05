@@ -60,6 +60,18 @@ enum SurfaceFixtures {
         "detail":"This fingerprint is already activated"}]}
         """
     }
+
+    /// The API patch's wire shape for a same-licence conflict: `status` as a
+    /// JSON number (the D18 representation) and `meta.machineId` naming the
+    /// machine already holding the fingerprint. The server sends `meta` only
+    /// when that machine is on the requested licence; a cross-licence
+    /// conflict is `conflict()` above, with no `meta`.
+    static func sameLicenseConflict(machineId: String = "mach-1") -> String {
+        """
+        {"errors":[{"id":"e-1","status":409,"code":"FINGERPRINT_TAKEN","title":"Conflict",\
+        "detail":"This fingerprint is already activated","meta":{"machineId":"\(machineId)"}}]}
+        """
+    }
 }
 
 /// Sequential `async` map, so a test can read back a recorded request list from

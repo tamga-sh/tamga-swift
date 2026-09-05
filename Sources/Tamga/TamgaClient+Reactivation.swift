@@ -60,6 +60,10 @@ extension TamgaClient {
     /// Either way the original `409` is what you get, unchanged -- never a
     /// synthesized "not found". `TamgaError.isFingerprintTaken` identifies it.
     ///
+    /// Since the API patch a same-licence conflict names the existing machine
+    /// in `meta.machineId`; that is tried first with one `getMachine`, and the
+    /// licence-scoped search below is the fallback.
+    ///
     /// - Throws: everything `activateMachine(_:scope:)` throws, with the same
     ///   meanings, plus a rethrown `409 FINGERPRINT_TAKEN` when the lookup
     ///   above finds nothing.
@@ -70,13 +74,36 @@ extension TamgaClient {
         do {
             return try await activateMachine(options, scope: scope)
         } catch let error as TamgaError where error.isFingerprintTaken {
-            guard let existing = try await findMachine(
-                fingerprint: options.fingerprint, licenseId: options.licenseId)
-            else {
+            guard let existing = try await resolveTakenFingerprint(error, options: options) else {
                 throw error
             }
             return try await validateExistingActivation(existing, options: options, scope: scope)
         }
+    }
+
+    /// Finds the machine a `409 FINGERPRINT_TAKEN` refused to duplicate.
+    ///
+    /// Fast path first: a same-licence conflict names the machine in
+    /// `meta.machineId` (`TamgaError.conflictingMachineId`), so one
+    /// `getMachine` replaces the search. The search is the fallback for a
+    /// pre-patch server, a conflict that carried no `meta`, and the race
+    /// where the named row was deleted between the two calls -- the read
+    /// `404`s, the search finds nothing, and the caller rethrows the `409`,
+    /// never the `404`. Only a same-licence conflict carries `meta`, so an
+    /// adopted machine is always the caller's own seat; the search keeps the
+    /// licence scoping documented on `reactivateMachine` for the same reason.
+    private func resolveTakenFingerprint(
+        _ conflict: TamgaError,
+        options: CreateMachineOptions
+    ) async throws -> Machine? {
+        if let machineId = conflict.conflictingMachineId {
+            do {
+                return try await getMachine(machineId)
+            } catch let error as TamgaError where error.isNotFound {
+                // Fall through to the search.
+            }
+        }
+        return try await findMachine(fingerprint: options.fingerprint, licenseId: options.licenseId)
     }
 
     /// Finds the licence's machine with exactly this fingerprint, or `nil`.
