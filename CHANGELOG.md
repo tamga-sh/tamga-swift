@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.3.3](https://github.com/tamga-sh/tamga-swift/compare/v1.3.2...v1.3.3) (2026-09-05)
+
+
+### Bug Fixes
+
+* **checkout:** reject a fast-path machine whose fingerprint doesn't match ([8cf2eba](https://github.com/tamga-sh/tamga-swift/commit/8cf2ebabb425b0e6c30def99ff358019a1f13bb5))
+* numeric status, error meta, meta.machineId fast path (1.3.3) ([8d0c03c](https://github.com/tamga-sh/tamga-swift/commit/8d0c03c3a2a1ec25f4274fede88bfa3e8316b4bb))
+* tolerate a numeric error status, carry the error meta, and adopt the machine a 409 names ([45159e7](https://github.com/tamga-sh/tamga-swift/commit/45159e7d6877634012450d1c646a8d56203aa5fc))
+
 ## [1.3.2](https://github.com/tamga-sh/tamga-swift/compare/v1.3.1...v1.3.2) (2026-08-21)
 
 
