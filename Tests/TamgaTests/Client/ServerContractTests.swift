@@ -284,6 +284,21 @@ struct ServerContractTests {
         #expect(!ValidationCode.checksumScopeMismatch.isReachable)
     }
 
+    @Test("the heartbeat verdicts and TOO_MANY_USERS are reachable since the API patch")
+    func heartbeatAndUsersVerdictsAreReachable() {
+        #expect(ValidationCode.heartbeatNotStarted.isReachable)
+        #expect(ValidationCode.heartbeatDead.isReachable)
+        #expect(ValidationCode.tooManyUsers.isReachable)
+        for code in [ValidationCode.notFound, .banned, .componentsScopeMismatch,
+                     .checksumScopeMismatch, .versionScopeMismatch] {
+            #expect(!code.isReachable)
+        }
+        // None of the three joins the rollback set.
+        #expect(!ValidationCode.heartbeatDead.isOverLimit)
+        #expect(!ValidationCode.heartbeatNotStarted.isOverLimit)
+        #expect(!ValidationCode.tooManyUsers.isOverLimit)
+    }
+
     @Test("an ENTITLEMENTS_MISSING verdict decodes as a known code")
     func entitlementsMissingDecodesAsKnownCode() async throws {
         let performer = MockPerformer()

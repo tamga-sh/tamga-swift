@@ -64,9 +64,10 @@ public enum TamgaError: Error, Sendable {
     /// The machine is handed back instead: retry the validation, or delete it
     /// with `deleteMachine(_:)`.
     ///
-    /// This mirrors `tamga-go`, which returns the created machine alongside the
-    /// error rather than rolling back. `tamga-java` rolls back instead, because
-    /// throwing leaves it no way to return the machine; Swift has one.
+    /// This matches `tamga-go` and `tamga-java`
+    /// (`TamgaActivationValidationException.machine()`): a failed validate
+    /// call is not a verdict about the licence, so the machine is handed back
+    /// on the error rather than rolled back.
     case activationValidationFailed(machine: Machine, underlying: any Error)
 
     /// A decoded JSON:API error object plus the response it arrived with.
@@ -88,6 +89,25 @@ public enum TamgaError: Error, Sendable {
         public let pointer: String?
         /// Diagnostic response headers, notably the request id worth logging.
         public let responseMetadata: ResponseMetadata
+        /// The error object's `meta` members, scalars only and stringified;
+        /// empty when the server sent none. Per-code: today only
+        /// `FINGERPRINT_TAKEN` populates it (`machineId`), read through
+        /// `TamgaError.conflictingMachineId`.
+        public let meta: [String: String]
+
+        /// Internal on purpose: the memberwise init is not API. `meta`
+        /// defaults so every existing call site is unchanged.
+        init(code: String, httpStatus: Int, detail: String?, title: String?, id: String?,
+             pointer: String?, responseMetadata: ResponseMetadata, meta: [String: String] = [:]) {
+            self.code = code
+            self.httpStatus = httpStatus
+            self.detail = detail
+            self.title = title
+            self.id = id
+            self.pointer = pointer
+            self.responseMetadata = responseMetadata
+            self.meta = meta
+        }
     }
 
     /// The stable error code, when this is an `.api` error.
@@ -124,6 +144,13 @@ extension TamgaError: LocalizedError {
     }
 }
 
+/// `ErrorDocument.Entry`'s coding keys, kept at file scope rather than nested
+/// inside `Entry` -- `Entry` is already nested inside `ErrorDocument`, and a
+/// further-nested `CodingKeys` would be two levels deep.
+private enum EntryCodingKeys: String, CodingKey {
+    case id, status, code, title, detail, source, meta
+}
+
 /// The wire shape of a JSON:API error document.
 struct ErrorDocument: Decodable {
     struct Source: Decodable {
@@ -132,14 +159,82 @@ struct ErrorDocument: Decodable {
 
     struct Entry: Decodable {
         let id: String?
+        /// JSON:API renders this as a string; a JSON number is accepted too
+        /// (D18) and rendered as its decimal text. Anything else reads as nil.
         let status: String?
         let code: String?
         let title: String?
         let detail: String?
         let source: Source?
+        /// Scalar `meta` members, stringified. Nested values and nulls are
+        /// dropped, and a `meta` that is not an object reads as empty --
+        /// never as a decode failure, which would cost the code.
+        let meta: [String: String]
+
+        init(from decoder: any Decoder) throws {
+            let container = try decoder.container(keyedBy: EntryCodingKeys.self)
+            id = try container.decodeIfPresent(String.self, forKey: .id)
+            code = try container.decodeIfPresent(String.self, forKey: .code)
+            title = try container.decodeIfPresent(String.self, forKey: .title)
+            detail = try container.decodeIfPresent(String.self, forKey: .detail)
+            source = try container.decodeIfPresent(Source.self, forKey: .source)
+            status = Self.decodeStatus(from: container)
+            let scalars = try? container.decodeIfPresent([String: ErrorMetaScalar].self,
+                                                          forKey: .meta)
+            meta = scalars?.compactMapValues(\.stringValue) ?? [:]
+        }
+
+        private static func decodeStatus(
+            from container: KeyedDecodingContainer<EntryCodingKeys>
+        ) -> String? {
+            if let text = try? container.decode(String.self, forKey: .status) {
+                return text
+            }
+            if let number = try? container.decode(Int.self, forKey: .status) {
+                return String(number)
+            }
+            return nil
+        }
     }
 
     let errors: [Entry]?
+}
+
+/// One JSON scalar inside an error's `meta`, decoded leniently: strings,
+/// booleans and numbers are kept; null, arrays and objects become
+/// `.unsupported` and are dropped by the caller. Bool is tried before Int so
+/// `true` never reads as `1` on a Foundation that bridges through NSNumber.
+enum ErrorMetaScalar: Decodable {
+    case string(String)
+    case bool(Bool)
+    case int(Int)
+    case double(Double)
+    case unsupported
+
+    init(from decoder: any Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        if let value = try? container.decode(String.self) {
+            self = .string(value)
+        } else if let value = try? container.decode(Bool.self) {
+            self = .bool(value)
+        } else if let value = try? container.decode(Int.self) {
+            self = .int(value)
+        } else if let value = try? container.decode(Double.self) {
+            self = .double(value)
+        } else {
+            self = .unsupported
+        }
+    }
+
+    var stringValue: String? {
+        switch self {
+        case .string(let value): return value
+        case .bool(let value): return String(value)
+        case .int(let value): return String(value)
+        case .double(let value): return String(value)
+        case .unsupported: return nil
+        }
+    }
 }
 
 /// Errors thrown by `Checkout/LicenseFile.swift`, `Checkout/MachineFile.swift`,

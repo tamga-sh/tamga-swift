@@ -17,7 +17,7 @@ point at <https://tamga.sh> instead.
 ECDSA-P256, RSA PKCS1/PSS, DER), `Checkout/`, `Proof.swift`, and the HTTP surface
 (`TamgaClient`'s 35 methods, `Transport`, `AuthTransport`, the JSON:API error model,
 `EntitlementCache`, both heartbeat schedulers, and the full `Policy` struct) are all implemented
-and tested — 385 tests, ~94.6% line coverage against an 80% gate. (The method count read "31"
+and tested — 393 tests, ~94.6% line coverage against an 80% gate. (The method count read "31"
 before this was recounted mechanically at `git grep -c '^    public func ' Sources/Tamga/TamgaClient*.swift`;
 it was 32 on the previous release and three artifact reads were added on top.)
 
@@ -290,8 +290,9 @@ specification covers the full set, including analytics/EE items that don't touch
   silently collapses to its last occurrence.
 - **A machine resource carries no `license_id` and no `relationships`.** No serializer in the API
   emits a relationships block. So nothing client-side can tell which licence a machine belongs to,
-  which is why `reactivateMachine`'s fingerprint lookup is account-wide and why
-  `Scope(fingerprint:)` is the only membership check available.
+  which is why `reactivateMachine`'s fingerprint lookup is licence-scoped in the query
+  (`filter[license]`) and, since the API patch, prefers the `meta.machineId` a same-licence `409`
+  carries, and why `Scope(fingerprint:)` is the only membership check available.
 - **The process reaper is dead code.** No server job deletes a process row, ever, and processes
   count against `policy.max_processes`. `deleteProcess` / `ProcessHeartbeatScheduler.stopAndDelete`
   are the only things that clean up.
@@ -302,12 +303,12 @@ specification covers the full set, including analytics/EE items that don't touch
   fails `401 LICENSE_NOT_ALLOWED` — a policy configuration precondition, not a retryable auth
   failure. Separately, an expired license still authenticates under three of the four expiration
   strategies and only fails `401 LICENSE_EXPIRED` under `REVOKE_ACCESS`.
-- **16 of 24 `ValidationCode` values are reachable.** Model all 24 with lenient/unknown-value
-  decoding, but don't build UI/UX around the 8 that are declared and never emitted
-  (`BANNED`, `TOO_MANY_USERS`, `HEARTBEAT_DEAD`, `HEARTBEAT_NOT_STARTED`,
+- **19 of 24 `ValidationCode` values are reachable.** Model all 24 with lenient/unknown-value
+  decoding, but don't build UI/UX around the 5 that are declared and never emitted (`BANNED`,
   `COMPONENTS_SCOPE_MISMATCH`, `CHECKSUM_SCOPE_MISMATCH`, `VERSION_SCOPE_MISMATCH`, and
-  `NOT_FOUND` which surfaces as an HTTP 404 instead of this code). `ENTITLEMENTS_MISSING` and
-  `FINGERPRINT_SCOPE_MISMATCH` moved onto the reachable side — see the `Scope` bullet below.
+  `NOT_FOUND` which surfaces as an HTTP 404 instead of this code). `HEARTBEAT_NOT_STARTED`/
+  `HEARTBEAT_DEAD` are emitted by the fingerprint scope under `require_heartbeat` and
+  `TOO_MANY_USERS` by all three validate routes since the API patch; none joins the rollback set.
 - **`Scope`: six fields enforced, two that break the call.** `product`/`policy`/`user`/
   `environment` were always enforced; `entitlements` and `fingerprint` now genuinely are.
   `entitlements` takes entitlement **codes** (not the attach/detach UUIDs), compared
@@ -405,8 +406,10 @@ specification covers the full set, including analytics/EE items that don't touch
   `ping-heartbeat` sets `last_heartbeat_at = NOW()` and `heartbeat_status_within` then measures
   `Utc::now() - last_heartbeat_at` against the window (`machines/model.rs:124-146`), so it is always
   `ALIVE` or `RESURRECTED`; `reset-heartbeat` nulls the column and `POST /machines` never sets it,
-  so both are `NOT_STARTED`; and `validate` never constructs `ValidationCode::HeartbeatDead` — the
-  variant exists in `licenses/model.rs:201` with zero construction sites. `DEAD` is served from
+  so both are `NOT_STARTED`; `validate` (`licenses/model.rs:201`) now constructs
+  `ValidationCode::HeartbeatDead` too, under `scope.fingerprint` with `policy.require_heartbeat`
+  set, judging the matched machine's stored `last_heartbeat_at` — a ping's own write-then-derive
+  path above still cannot produce it. `DEAD` is served from
   anything that reads the stored row: `check-out`, `generate-offline-proof`, and now
   `GET /machines/{id}` and `GET /machines`, all wrapped here. **`PATCH /machines/{id}` is the
   counterexample to the route-shaped version of this rule** — it is a write, but it never touches

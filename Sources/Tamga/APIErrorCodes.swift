@@ -107,6 +107,19 @@ public enum TamgaAPIErrorCode {
     /// bytes cannot be served. Not an authorization problem.
     public static let storageUnavailable = "STORAGE_UNAVAILABLE"
 
+    // MARK: Key material (HTTP 422)
+
+    /// The account holds no signing key for the operation -- a licence or
+    /// machine check-out, or an offline proof -- so the server refuses rather
+    /// than signing with nothing. Pre-patch servers issued such files anyway,
+    /// stamping `key_id("")` (`e3b0c44298fc1c14`) as the `kid`. Not
+    /// retryable: an operator rotates a key in.
+    public static let signingKeyMissing = "SIGNING_KEY_MISSING"
+
+    /// Token minting was refused because the account has no secret key. Same
+    /// remedy class as `signingKeyMissing`: server-side configuration.
+    public static let secretKeyMissing = "SECRET_KEY_MISSING"
+
     // MARK: Uniqueness (HTTP 409)
 
     /// A machine with this fingerprint is already registered within the
@@ -253,5 +266,31 @@ extension TamgaError {
     public var isFingerprintTaken: Bool {
         guard case .api(let error) = self else { return false }
         return error.code == TamgaAPIErrorCode.fingerprintTaken
+    }
+
+    /// The id of the machine already holding the fingerprint a
+    /// `409 FINGERPRINT_TAKEN` refused, when the server named it.
+    ///
+    /// Non-nil only for `isFingerprintTaken` and only when the error's `meta`
+    /// carried a non-empty `machineId`. The server sends that only when the
+    /// machine is on the licence the create was addressed to, so a returned
+    /// id is always the caller's own seat. A cross-licence conflict under
+    /// `UNIQUE_PER_POLICY`/`UNIQUE_PER_ACCOUNT`, and a pre-patch server, carry
+    /// no `meta` and read as `nil`. `reactivateMachine` uses it to skip the
+    /// paginated search.
+    public var conflictingMachineId: String? {
+        guard isFingerprintTaken, case .api(let error) = self,
+              let id = error.meta["machineId"], !id.isEmpty
+        else { return nil }
+        return id
+    }
+
+    /// Whether check-out or offline-proof generation was refused because the
+    /// account holds no signing key (`SIGNING_KEY_MISSING`). Not retryable.
+    /// `SECRET_KEY_MISSING` (token minting) is a sibling with the same remedy
+    /// class; compare `apiCode` against `TamgaAPIErrorCode.secretKeyMissing`.
+    public var isSigningKeyMissing: Bool {
+        guard case .api(let error) = self else { return false }
+        return error.code == TamgaAPIErrorCode.signingKeyMissing
     }
 }

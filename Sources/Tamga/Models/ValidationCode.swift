@@ -7,8 +7,8 @@ import Foundation
 /// field is human-readable text whose wording may change between server
 /// versions -- never match on it.
 ///
-/// All 24 wire values are modeled for schema completeness, but **only 16 are
-/// reachable** against the server today; `isReachable` reports which. Do not
+/// All 24 wire values are modeled for schema completeness, but **only 19 are
+/// reachable** against the patched server; `isReachable` reports which. Do not
 /// build product behaviour on an unreachable one. An unrecognized value decodes
 /// to `.unknown` rather than failing, so a server-side addition can never break
 /// a released SDK.
@@ -54,11 +54,15 @@ public enum ValidationCode: Equatable, Sendable {
     /// de-duplication, and both directly attached and policy-inherited
     /// entitlements satisfy the check.
     case entitlementsMissing
-    /// Unreachable: declared in the server's enum, never emitted.
+    /// Reachable since the API patch: users over policy.max_users, from all
+    /// three validate endpoints. Not an over-limit code.
     case tooManyUsers
-    /// Unreachable: declared in the server's enum, never emitted.
+    /// Reachable since the API patch: scope.fingerprint matched a machine
+    /// whose last ping is outside the window, under policy.require_heartbeat.
+    /// Never emitted by a ping.
     case heartbeatDead
-    /// Unreachable: declared in the server's enum, never emitted.
+    /// Reachable since the API patch: scope.fingerprint matched a machine
+    /// that has never pinged, under policy.require_heartbeat.
     case heartbeatNotStarted
     /// Reachable. `scope.fingerprint` was set and matched no machine on the
     /// licence. Heartbeat status is not considered.
@@ -129,7 +133,8 @@ public enum ValidationCode: Equatable, Sendable {
              .productScopeMismatch, .policyScopeMismatch, .userScopeMismatch,
              .environmentScopeMismatch, .tooManyMachines, .tooManyCores,
              .tooMuchMemory, .tooMuchDisk, .tooManyProcesses, .tooManyUses,
-             .entitlementsMissing, .fingerprintScopeMismatch:
+             .entitlementsMissing, .fingerprintScopeMismatch,
+             .tooManyUsers, .heartbeatDead, .heartbeatNotStarted:
             return true
         default:
             return false

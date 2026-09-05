@@ -212,13 +212,14 @@ public enum TamgaSigningKeyError: Error, Equatable {
     /// The key set held nothing that could verify anything: it was empty, or
     /// every entry was for another algorithm, or none decoded as base64.
     ///
-    /// **An empty set is the ordinary state of a healthy account**, not an
-    /// error condition upstream. `account_signing_keys` is written only by
-    /// `rotate_ed25519` (`signing_keys.rs:113-`), which backfills the current
-    /// key on its way through, so an account that has never rotated has no
-    /// rows at all and `GET /signing-keys` answers `{"data": []}`. Pin the
-    /// account's published key with `TamgaSigningKey.ed25519(publicKey:)` and
-    /// verification works before the first rotation as well as after it.
+    /// **An empty set marks a pre-patch server.** Before the API patch
+    /// `account_signing_keys` was written only by `rotate_ed25519`, so an
+    /// account that had never rotated answered `{"data": []}`; the patched
+    /// server publishes every account's key from creation and backfills
+    /// existing accounts at startup, and refuses check-out with
+    /// `422 SIGNING_KEY_MISSING` rather than signing with nothing. Pin the
+    /// account's published key with `TamgaSigningKey.ed25519(publicKey:)`
+    /// when the route is not reachable under your credential.
     ///
     /// The associated value lists the ids that were present but unusable.
     case noUsableSigningKey(available: [String])
