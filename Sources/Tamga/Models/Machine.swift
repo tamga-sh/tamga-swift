@@ -28,8 +28,9 @@ public enum HeartbeatStatus: String, Equatable, Sendable {
     /// The durable rule is *what the response was built from*, not "read routes
     /// versus write routes": a response derived from a timestamp the same
     /// request just wrote cannot say `.dead`, and `updateMachine` is the write
-    /// that proves the route-list version of that rule wrong. `validate` never
-    /// emits `ValidationCode.heartbeatDead` either way.
+    /// that proves the route-list version of that rule wrong. `validate` emits
+    /// `ValidationCode.heartbeatDead` too, but only through its `scope.fingerprint` path judging a
+    /// matched machine's stored `last_heartbeat_at` -- never through a ping's write-then-derive one.
     ///
     /// What `.dead` must not be is a branch in a tick callback -- against a
     /// ping it is unreachable code.

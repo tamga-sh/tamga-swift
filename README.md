@@ -472,7 +472,9 @@ deliberate boundaries, not oversights.
 - **`.dead` never comes back from a ping** — but it is ordinary elsewhere. `pingHeartbeat` writes
   `last_heartbeat_at = NOW()` and then derives the status from that same timestamp, so it answers
   `.alive` or `.resurrected`; `createMachine` and `resetHeartbeat` answer `.notStarted`; and
-  `validate` never emits `heartbeatDead`. A `.dead` branch in a tick callback is unreachable code.
+  `validate` emits `heartbeatDead` only under `scope.fingerprint` with the policy's
+  `requireHeartbeat` set — never from a ping response. A `.dead` branch in a tick callback is
+  still unreachable code.
   `getMachine`, `listMachines`, `checkOutMachine`, `generateOfflineProof` — and `updateMachine`,
   a write that never touches the heartbeat column — can all report it. The rule that survives new
   routes is *what the response was built from*: a status derived from a timestamp the same request

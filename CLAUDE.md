@@ -17,7 +17,7 @@ point at <https://tamga.sh> instead.
 ECDSA-P256, RSA PKCS1/PSS, DER), `Checkout/`, `Proof.swift`, and the HTTP surface
 (`TamgaClient`'s 35 methods, `Transport`, `AuthTransport`, the JSON:API error model,
 `EntitlementCache`, both heartbeat schedulers, and the full `Policy` struct) are all implemented
-and tested — 385 tests, ~94.6% line coverage against an 80% gate. (The method count read "31"
+and tested — 393 tests, ~94.6% line coverage against an 80% gate. (The method count read "31"
 before this was recounted mechanically at `git grep -c '^    public func ' Sources/Tamga/TamgaClient*.swift`;
 it was 32 on the previous release and three artifact reads were added on top.)
 
@@ -406,8 +406,10 @@ specification covers the full set, including analytics/EE items that don't touch
   `ping-heartbeat` sets `last_heartbeat_at = NOW()` and `heartbeat_status_within` then measures
   `Utc::now() - last_heartbeat_at` against the window (`machines/model.rs:124-146`), so it is always
   `ALIVE` or `RESURRECTED`; `reset-heartbeat` nulls the column and `POST /machines` never sets it,
-  so both are `NOT_STARTED`; and `validate` never constructs `ValidationCode::HeartbeatDead` — the
-  variant exists in `licenses/model.rs:201` with zero construction sites. `DEAD` is served from
+  so both are `NOT_STARTED`; `validate` (`licenses/model.rs:201`) now constructs
+  `ValidationCode::HeartbeatDead` too, under `scope.fingerprint` with `policy.require_heartbeat`
+  set, judging the matched machine's stored `last_heartbeat_at` — a ping's own write-then-derive
+  path above still cannot produce it. `DEAD` is served from
   anything that reads the stored row: `check-out`, `generate-offline-proof`, and now
   `GET /machines/{id}` and `GET /machines`, all wrapped here. **`PATCH /machines/{id}` is the
   counterexample to the route-shaped version of this rule** — it is a write, but it never touches
