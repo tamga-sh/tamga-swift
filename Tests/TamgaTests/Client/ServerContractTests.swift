@@ -295,6 +295,7 @@ struct ServerContractTests {
         }
         // None of the three joins the rollback set.
         #expect(!ValidationCode.heartbeatDead.isOverLimit)
+        #expect(!ValidationCode.heartbeatNotStarted.isOverLimit)
         #expect(!ValidationCode.tooManyUsers.isOverLimit)
     }
 
