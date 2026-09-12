@@ -110,7 +110,7 @@ enum Fixtures {
     static func licenseWithMeta(code: String = "VALID", valid: Bool = true) -> String {
         """
         {"data":{"id":"lic-1","type":"licenses","attributes":{"key":"K","status":"ACTIVE",\
-        "machines_count":2,"suspended":false,"uses":3}},\
+        "machines_count":2,"suspended":false}},\
         "meta":{"ts":"2026-08-20T10:00:00Z","valid":\(valid),"detail":"d","code":"\(code)"}}
         """
     }

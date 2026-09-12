@@ -21,8 +21,6 @@ public struct License: Equatable, Sendable {
     public let suspended: Bool
     /// The license's expiration timestamp, if any.
     public let expiry: Date?
-    /// The number of times the license has been used.
-    public let uses: Int
     /// Timestamp of the license's last successful validation, if any.
     public let lastValidatedAt: Date?
     /// Timestamp of the license's last check-in, if any.
@@ -39,8 +37,6 @@ public struct License: Equatable, Sendable {
     public let maxMachines: Int?
     /// The user limit carried on the license.
     public let maxUsers: Int?
-    /// The use limit carried on the license.
-    public let maxUses: Int?
     /// How many machines are currently registered against this license.
     public let machinesCount: Int
     /// When the license was last checked out.
@@ -65,7 +61,6 @@ public struct License: Equatable, Sendable {
         key: String?,
         suspended: Bool,
         expiry: Date?,
-        uses: Int,
         lastValidatedAt: Date?,
         lastCheckInAt: Date?,
         metadata: [String: JSONValue]?,
@@ -74,7 +69,6 @@ public struct License: Equatable, Sendable {
         scheme: String? = nil,
         maxMachines: Int? = nil,
         maxUsers: Int? = nil,
-        maxUses: Int? = nil,
         machinesCount: Int = 0,
         lastCheckOutAt: Date? = nil,
         created: Date? = nil,
@@ -88,7 +82,6 @@ public struct License: Equatable, Sendable {
         self.key = key
         self.suspended = suspended
         self.expiry = expiry
-        self.uses = uses
         self.lastValidatedAt = lastValidatedAt
         self.lastCheckInAt = lastCheckInAt
         self.metadata = metadata
@@ -97,7 +90,6 @@ public struct License: Equatable, Sendable {
         self.scheme = scheme
         self.maxMachines = maxMachines
         self.maxUsers = maxUsers
-        self.maxUses = maxUses
         self.machinesCount = machinesCount
         self.lastCheckOutAt = lastCheckOutAt
         self.created = created
@@ -119,7 +111,6 @@ public struct License: Equatable, Sendable {
             key: attrs?.key,
             suspended: attrs?.suspended ?? false,
             expiry: attrs?.expiry,
-            uses: attrs?.uses ?? 0,
             lastValidatedAt: attrs?.lastValidatedAt,
             lastCheckInAt: attrs?.lastCheckInAt,
             metadata: attrs?.metadata,
@@ -128,7 +119,6 @@ public struct License: Equatable, Sendable {
             scheme: attrs?.scheme,
             maxMachines: attrs?.maxMachines,
             maxUsers: attrs?.maxUsers,
-            maxUses: attrs?.maxUses,
             machinesCount: attrs?.machinesCount ?? 0,
             lastCheckOutAt: attrs?.lastCheckOutAt,
             created: attrs?.created,
@@ -151,7 +141,6 @@ struct LicenseAttributes: Decodable {
     // be fatal either.
     let suspended: Bool?
     let expiry: Date?
-    let uses: Int?
     let lastValidatedAt: Date?
     let lastCheckInAt: Date?
     let metadata: [String: JSONValue]?
@@ -160,7 +149,6 @@ struct LicenseAttributes: Decodable {
     let scheme: String?
     let maxMachines: Int?
     let maxUsers: Int?
-    let maxUses: Int?
     let machinesCount: Int?
     let lastCheckOutAt: Date?
     let created: Date?

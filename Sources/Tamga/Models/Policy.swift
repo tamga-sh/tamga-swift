@@ -30,8 +30,7 @@ public enum LicenseScheme: String, Equatable, Sendable {
 
 /// How far past a numeric limit a license may go before validation fails.
 ///
-/// Applies to machines, cores, memory, disk and processes -- **never** to
-/// `uses`, which the server always compares strictly.
+/// Applies to machines, cores, memory, disk and processes.
 public enum OverageStrategy: Equatable, Sendable {
     /// Enforces the limit strictly: `count <= max`.
     case noOverage
@@ -231,8 +230,6 @@ public struct Policy: Equatable, Sendable {
     public let maxProcesses: Int?
     /// The user limit, or `nil` when unlimited.
     public let maxUsers: Int?
-    /// The use limit. Uses ignore the overage strategy.
-    public let maxUses: Int?
     /// The license duration in seconds, or `nil` when perpetual.
     public let duration: Int64?
     /// `policy.heartbeat_duration`, the machine heartbeat window in seconds.
@@ -308,7 +305,6 @@ public struct Policy: Equatable, Sendable {
             maxCores: attrs?.maxCores,
             maxProcesses: attrs?.maxProcesses,
             maxUsers: attrs?.maxUsers,
-            maxUses: attrs?.maxUses,
             duration: attrs?.duration,
             heartbeatDuration: attrs?.heartbeatDuration,
             checkInIntervalCount: attrs?.checkInIntervalCount,
@@ -344,7 +340,6 @@ struct PolicyAttributes: Decodable {
     let maxCores: Int?
     let maxProcesses: Int?
     let maxUsers: Int?
-    let maxUses: Int?
     let duration: Int64?
     let heartbeatDuration: Int?
     let checkInIntervalCount: Int?

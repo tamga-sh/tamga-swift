@@ -7,7 +7,7 @@ import Foundation
 /// field is human-readable text whose wording may change between server
 /// versions -- never match on it.
 ///
-/// All 24 wire values are modeled for schema completeness, but **only 19 are
+/// All 23 wire values are modeled for schema completeness, but **only 18 are
 /// reachable** against the patched server; `isReachable` reports which. Do not
 /// build product behaviour on an unreachable one. An unrecognized value decodes
 /// to `.unknown` rather than failing, so a server-side addition can never break
@@ -40,9 +40,6 @@ public enum ValidationCode: Equatable, Sendable {
     case tooMuchDisk
     /// Process count exceeded `policy.max_processes`. Reachable.
     case tooManyProcesses
-    /// Uses reached `max_uses`. Reachable. The comparison is a strict `>=` and
-    /// overage strategies never apply to uses, unlike every other limit.
-    case tooManyUses
 
     /// Unreachable: the handler returns a bare HTTP 404 rather than emitting
     /// this code.
@@ -94,7 +91,6 @@ public enum ValidationCode: Equatable, Sendable {
         (.tooMuchMemory, "TOO_MUCH_MEMORY"),
         (.tooMuchDisk, "TOO_MUCH_DISK"),
         (.tooManyProcesses, "TOO_MANY_PROCESSES"),
-        (.tooManyUses, "TOO_MANY_USES"),
         (.notFound, "NOT_FOUND"),
         (.banned, "BANNED"),
         (.entitlementsMissing, "ENTITLEMENTS_MISSING"),
@@ -132,7 +128,7 @@ public enum ValidationCode: Equatable, Sendable {
         case .valid, .suspended, .expired, .overdue,
              .productScopeMismatch, .policyScopeMismatch, .userScopeMismatch,
              .environmentScopeMismatch, .tooManyMachines, .tooManyCores,
-             .tooMuchMemory, .tooMuchDisk, .tooManyProcesses, .tooManyUses,
+             .tooMuchMemory, .tooMuchDisk, .tooManyProcesses,
              .entitlementsMissing, .fingerprintScopeMismatch,
              .tooManyUsers, .heartbeatDead, .heartbeatNotStarted:
             return true

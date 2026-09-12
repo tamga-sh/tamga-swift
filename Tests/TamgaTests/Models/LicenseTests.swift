@@ -8,7 +8,7 @@ struct LicenseTests {
     private static func makeLicense(key: String = "KEY-1") -> License {
         License(
             id: "lic_1", key: key, suspended: false, expiry: nil,
-            uses: 0, lastValidatedAt: nil, lastCheckInAt: nil, metadata: nil
+            lastValidatedAt: nil, lastCheckInAt: nil, metadata: nil
         )
     }
 
@@ -31,6 +31,5 @@ struct LicenseTests {
 
         #expect(license.id == "lic_123")
         #expect(license.key == "TAMGA-FULL-FIELDS")
-        #expect(license.uses == 3)
     }
 }

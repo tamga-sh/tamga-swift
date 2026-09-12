@@ -34,7 +34,7 @@ struct SigningKeySelectionTests {
     static func licensePayload(kid: String, exp: Int64? = nil) -> Data {
         let expField = exp.map { ",\"exp\":\($0)" } ?? ""
         return Data("""
-        {"data":{"id":"lic_123","type":"licenses","attributes":{"key":"K","suspended":false,"uses":0}},\
+        {"data":{"id":"lic_123","type":"licenses","attributes":{"key":"K","suspended":false}},\
         "meta":{"iat":1767225600,"jti":"jti-1","kid":"\(kid)"\(expField)}}
         """.utf8)
     }
