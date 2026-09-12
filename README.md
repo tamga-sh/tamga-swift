@@ -494,6 +494,23 @@ deliberate boundaries, not oversights.
   is always `nil` and a license with more than 100 effective entitlements cannot be enumerated in
   full. `hasEntitlement` reads that single page, so a `false` is authoritative only below the
   ceiling. Component listing is unaffected — keyset pagination works there.
+- **An entitlement can be a named, per-license meter, not just a boolean flag.** `Entitlement.kind`
+  (`.flag`/`.meter`) is always present; the license-scoped listing also carries `maxValue` (the
+  effective cap, `nil` for unlimited) and `currentValue` (the running count, `0` if never
+  incremented or if this entitlement is only policy-inherited and never directly attached — check
+  `inherited` to tell the two apart). `incrementEntitlementUsage`/`decrementEntitlementUsage`/
+  `resetEntitlementUsage` mirror `pingHeartbeat`/`resetHeartbeat`'s shape one level deeper in the
+  URL, and only work on a *directly attached* entitlement — one only inherited via the license's
+  policy 404s until you attach it directly:
+
+  ```swift
+  let entitlement = try await client.incrementEntitlementUsage(
+      licenseId: license.id, entitlementId: "REQUESTS-ENTITLEMENT-ID")
+  print("\(entitlement.currentValue ?? 0) / \(entitlement.maxValue.map(String.init) ?? "unlimited")")
+
+  // catch let error as TamgaError where error.isMeterLimitExceeded:
+  //     print("meter \(error.meterLimitEntitlementId ?? "?") is at its cap")
+  ```
 - **The auto-update check's "no update" answer does not mean "you are up to date".**
   `checkForUpgrade` returns `.noneAvailable` for two server-side situations the server refuses to
   distinguish: there is no newer release, *or* there is one and this licence is not entitled to it.
