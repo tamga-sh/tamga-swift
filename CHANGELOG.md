@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.3.4](https://github.com/tamga-sh/tamga-swift/compare/v1.3.3...v1.3.4) (2026-09-12)
+
+
+### Bug Fixes
+
+* entitlement metering migration (patch-only override) ([#33](https://github.com/tamga-sh/tamga-swift/issues/33)) ([4a4e034](https://github.com/tamga-sh/tamga-swift/commit/4a4e03446a353407785eb5240af39bf2ff0f9ae8))
+
 ## [1.3.3](https://github.com/tamga-sh/tamga-swift/compare/v1.3.2...v1.3.3) (2026-09-05)
 
 
