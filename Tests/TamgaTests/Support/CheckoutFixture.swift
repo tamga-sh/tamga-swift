@@ -135,7 +135,7 @@ enum CheckoutFixture {
     ) -> Data {
         let expField = exp.map { ",\"exp\":\($0)" } ?? ""
         let json = """
-        {"data":{"id":"lic_123","type":"licenses","attributes":{"key":"\(key)","suspended":\(suspended),"uses":0}},\
+        {"data":{"id":"lic_123","type":"licenses","attributes":{"key":"\(key)","suspended":\(suspended)}},\
         "meta":{"iat":1767225600,"jti":"test-jti","kid":"test-kid"\(expField)}}
         """
         return Data(json.utf8)
@@ -148,7 +148,7 @@ enum CheckoutFixture {
     static func fullLicensePayloadJSON(key: String = "TEST-LICENSE-KEY") -> Data {
         let json = """
         {"data":{"id":"lic_123","type":"licenses","attributes":{
-          "key":"\(key)","suspended":false,"uses":3,
+          "key":"\(key)","suspended":false,
           "expiry":"2027-01-01T00:00:00Z",
           "last_validated_at":"2026-08-01T12:00:00.500Z",
           "last_check_in_at":"2026-07-15T09:30:00Z",

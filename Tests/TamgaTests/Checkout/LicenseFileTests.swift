@@ -31,7 +31,6 @@ struct LicenseFileTests {
             publicKey: key.publicKey.rawRepresentation, licenseKey: "unused-for-plain"
         )
 
-        #expect(license.uses == 3)
         #expect(license.expiry != nil)
         #expect(license.lastValidatedAt != nil)
         #expect(license.lastCheckInAt != nil)
