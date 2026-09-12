@@ -73,4 +73,64 @@ extension TamgaClient {
     public func invalidateEntitlementCache(licenseId: String) async {
         await entitlementCache.invalidate(licenseId: licenseId)
     }
+
+    // MARK: - Meter actions
+
+    /// Increments a `kind: .meter` entitlement's usage counter for a license.
+    ///
+    /// Mirrors `pingHeartbeat`/`resetHeartbeat`'s shape one level deeper in the
+    /// URL: a bare `POST .../actions/increment` that decodes back into the
+    /// full entitlement resource, so the caller sees the fresh `currentValue`
+    /// (and `maxValue`) without a second round trip.
+    ///
+    /// **Requires the entitlement to be directly attached to this license.**
+    /// If it is only inherited via the policy (no direct attachment), this
+    /// `404`s -- attach it directly first.
+    ///
+    /// `increment` defaults to `1` server-side when omitted, and any value
+    /// `<= 0` is raised to `1` rather than rejected -- the same clamping rule
+    /// the retired global counter's `increment-usage` action used.
+    ///
+    /// - Throws: an `.api` error whose `code` is
+    ///   `TamgaAPIErrorCode.meterLimitExceeded` when
+    ///   `currentValue + increment > maxValue`. `TamgaError.meterLimitEntitlementId`
+    ///   on that error names which entitlement hit its cap.
+    public func incrementEntitlementUsage(
+        licenseId: String, entitlementId: String, increment: Int? = nil
+    ) async throws -> Entitlement {
+        let data = try await transport.postJSON(
+            ["licenses", licenseId, "entitlements", entitlementId, "actions", "increment"],
+            body: increment.map { .object(["increment": .int(Int64($0))]) })
+        return Entitlement.fromResource(
+            try Self.decode(DataEnvelope<EntitlementAttributes>.self, from: data).data)
+    }
+
+    /// Decrements a `kind: .meter` entitlement's usage counter for a license,
+    /// floored at `0` server-side.
+    ///
+    /// Same directly-attached requirement as `incrementEntitlementUsage`, and
+    /// the same rule of raising a non-positive `decrement` to `1` rather than
+    /// rejecting it.
+    public func decrementEntitlementUsage(
+        licenseId: String, entitlementId: String, decrement: Int? = nil
+    ) async throws -> Entitlement {
+        let data = try await transport.postJSON(
+            ["licenses", licenseId, "entitlements", entitlementId, "actions", "decrement"],
+            body: decrement.map { .object(["decrement": .int(Int64($0))]) })
+        return Entitlement.fromResource(
+            try Self.decode(DataEnvelope<EntitlementAttributes>.self, from: data).data)
+    }
+
+    /// Resets a `kind: .meter` entitlement's usage counter for a license back
+    /// to `0`.
+    ///
+    /// Same directly-attached requirement as `incrementEntitlementUsage`.
+    public func resetEntitlementUsage(
+        licenseId: String, entitlementId: String
+    ) async throws -> Entitlement {
+        let data = try await transport.postJSON(
+            ["licenses", licenseId, "entitlements", entitlementId, "actions", "reset"], body: nil)
+        return Entitlement.fromResource(
+            try Self.decode(DataEnvelope<EntitlementAttributes>.self, from: data).data)
+    }
 }

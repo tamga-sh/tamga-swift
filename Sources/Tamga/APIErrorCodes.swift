@@ -50,6 +50,18 @@ public enum TamgaAPIErrorCode {
     /// Equivalent to validation's `TOO_MANY_PROCESSES`.
     public static let tooManyProcesses = "TOO_MANY_PROCESSES"
 
+    // MARK: Entitlement meter limit (HTTP 422)
+
+    /// `POST /licenses/{id}/entitlements/{eid}/actions/{increment,decrement}`
+    /// refused: `currentValue + increment > maxValue` on a `kind: .meter`
+    /// entitlement. Carries `meta.entitlement_id` -- see
+    /// `TamgaError.meterLimitEntitlementId`.
+    ///
+    /// Replaces the retired `ValidationCode.tooManyUses` (`TOO_MANY_USES`).
+    /// Unlike that validate-time verdict, this is an action error raised by
+    /// the increment/decrement endpoints themselves, not by `validate`.
+    public static let meterLimitExceeded = "METER_LIMIT_EXCEEDED"
+
     // MARK: License-state authentication rejections (HTTP 401)
 
     /// The licence authenticated against is suspended.
@@ -292,5 +304,25 @@ extension TamgaError {
     public var isSigningKeyMissing: Bool {
         guard case .api(let error) = self else { return false }
         return error.code == TamgaAPIErrorCode.signingKeyMissing
+    }
+
+    /// Whether an entitlement meter action was refused because incrementing
+    /// it would exceed `maxValue` (`METER_LIMIT_EXCEEDED`).
+    public var isMeterLimitExceeded: Bool {
+        guard case .api(let error) = self else { return false }
+        return error.code == TamgaAPIErrorCode.meterLimitExceeded
+    }
+
+    /// The id of the entitlement a `422 METER_LIMIT_EXCEEDED` refused, when
+    /// the server named it.
+    ///
+    /// Lets a caller juggling several meters on one license tell which one hit
+    /// its cap without re-parsing the increment/decrement request. `nil` when
+    /// this is not a meter-limit error, or when the server sent no `meta`.
+    public var meterLimitEntitlementId: String? {
+        guard isMeterLimitExceeded, case .api(let error) = self,
+              let id = error.meta["entitlement_id"], !id.isEmpty
+        else { return nil }
+        return id
     }
 }
